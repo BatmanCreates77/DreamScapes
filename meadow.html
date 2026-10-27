@@ -1,0 +1,1832 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0d1a08" />
+<title>Wildflower Hills</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0d1a08;
+    --fg: #ffffff;
+    --fg-dim: rgba(255, 255, 255, 0.74);
+    --ease-liquid: cubic-bezier(0.2, 0.9, 0.25, 1.15);
+    --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --radius: 28px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--fg);
+    font: 14px/1.35 system-ui, -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif; touch-action: none; }
+  canvas { display: block; position: fixed; inset: 0; width: 100vw; height: 100dvh; }
+  button, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  #status { position: fixed; left: 50%; top: calc(16px + env(safe-area-inset-top)); transform: translateX(-50%);
+    padding: 8px 14px; border-radius: 999px; background: rgba(12, 20, 10, 0.55); white-space: nowrap;
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); transition: opacity 0.6s; }
+  #status.hidden { opacity: 0; pointer-events: none; }
+
+  /* ---------- Liquid glass ------------------------------------------------ */
+  .glass {
+    position: relative; isolation: isolate;
+    background:
+      linear-gradient(165deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.06) 42%, rgba(255, 255, 255, 0.12)),
+      rgba(14, 24, 10, 0.26);
+    -webkit-backdrop-filter: blur(22px) saturate(185%);
+    backdrop-filter: blur(22px) saturate(185%);
+    box-shadow:
+      inset 0 1px 1px rgba(255, 255, 255, 0.7),
+      inset 0 -1px 1px rgba(255, 255, 255, 0.16),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+      0 20px 50px -14px rgba(0, 0, 0, 0.5);
+  }
+  /* Chromium can refract the backdrop through an SVG displacement map → real "liquid" lensing. */
+  .refract .glass { backdrop-filter: url(#liquid) blur(18px) saturate(185%); }
+  .glass::before { /* specular sheen along the top-left rim */
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: -1;
+    background: radial-gradient(120% 60% at 18% 0%, rgba(255, 255, 255, 0.35), transparent 55%);
+    mix-blend-mode: screen;
+  }
+
+  #dock { position: fixed; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    width: min(440px, calc(100vw - max(16px, env(safe-area-inset-left, 0px)) - max(16px, env(safe-area-inset-right, 0px))));
+    border-radius: var(--radius); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    transition: border-radius 0.4s var(--ease-out); }
+  body.no-ui #dock { display: none; }
+
+  .barRow { display: flex; align-items: center; padding-right: 8px; }
+  .iconbtn { all: unset; flex: none; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; cursor: pointer;
+    transition: background 0.2s; }
+  .iconbtn:hover { background: rgba(255, 255, 255, 0.12); }
+  .iconbtn .on, .iconbtn[aria-pressed="true"] .off { display: none; }
+  .iconbtn[aria-pressed="true"] .on { display: inline; }
+  #dockBar { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
+    min-height: 56px; padding: 8px 10px 8px 16px; cursor: pointer; border-radius: var(--radius); }
+  #dockBar .chip { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; min-width: 0; }
+  #dockBar .chip b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  #dockBar .chip .muted, #barWind { overflow: hidden; text-overflow: ellipsis; }
+  @media (max-width: 430px) { #barTod { display: none; } }
+  .credits { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 12px; color: var(--fg-dim); }   /* the name still shows in the panel header */
+  #dockBar .sep { width: 1px; height: 18px; background: rgba(255, 255, 255, 0.3); }
+  #dockBar .grow { flex: 1; }
+  #dockBar .chev { width: 44px; height: 40px; display: grid; place-items: center; border-radius: 50%;
+    transition: transform 0.4s var(--ease-liquid); }
+  #dock[data-open="true"] .chev { transform: rotate(180deg); }
+  .muted { color: var(--fg-dim); }
+  svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  #dockBody { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.45s var(--ease-out); }
+  #dock[data-open="true"] #dockBody { grid-template-rows: 1fr; }
+  #dockBody > div { overflow: hidden; min-height: 0; }
+  .sections { padding: 2px 16px 16px; display: grid; gap: 16px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row.between { justify-content: space-between; }
+  .label { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-dim); }
+
+  /* Time slider: the track is the sky over 24 h, the thumb is the sun/moon. */
+  .sky { -webkit-appearance: none; appearance: none; width: 100%; height: 44px; background: transparent; margin: 0; cursor: pointer; }
+  .sky::-webkit-slider-runnable-track { height: 10px; border-radius: 99px;
+    background: linear-gradient(90deg, #0e1730 0%, #26345e 20%, #e79a73 25%, #f5c48a 30%, #a9c8ee 37%, #c4dcf8 55%, #b8d0ee 68%, #ffc47a 74%, #f08a54 79%, #5a5884 83%, #1a2548 88%, #0e1730 100%);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35); }
+  .sky::-moz-range-track { height: 10px; border-radius: 99px;
+    background: linear-gradient(90deg, #0e1730 0%, #26345e 20%, #e79a73 25%, #f5c48a 30%, #a9c8ee 37%, #c4dcf8 55%, #b8d0ee 68%, #ffc47a 74%, #f08a54 79%, #5a5884 83%, #1a2548 88%, #0e1730 100%); }
+  .sky::-webkit-slider-thumb { -webkit-appearance: none; width: 26px; height: 26px; margin-top: -8px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #fff, var(--sun, #ffd27a) 60%); border: 2px solid rgba(255, 255, 255, 0.9);
+    box-shadow: 0 0 18px 4px var(--sun-glow, rgba(255, 200, 120, 0.7)); }
+  .sky::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff;
+    background: var(--sun, #ffd27a); box-shadow: 0 0 18px 4px var(--sun-glow, rgba(255, 200, 120, 0.7)); }
+
+  /* Segmented control with a sliding liquid indicator. */
+  .seg { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 3px;
+    border-radius: 999px; background: rgba(0, 0, 0, 0.18); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25); flex: 1; }
+  .seg button { all: unset; position: relative; z-index: 1; text-align: center; min-height: 38px; line-height: 38px;
+    border-radius: 999px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--fg-dim); transition: color 0.25s; }
+  .seg button[aria-checked="true"] { color: #fff; }
+  .seg button:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
+  .seg .pill { position: absolute; z-index: 0; top: 3px; bottom: 3px; left: 3px; border-radius: 999px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.18));
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.8), 0 4px 12px rgba(0, 0, 0, 0.2);
+    transition: transform 0.45s var(--ease-liquid), width 0.45s var(--ease-liquid); }
+
+  /* Wind direction dial */
+  .dial { position: relative; width: 48px; height: 48px; flex: none; border-radius: 50%; cursor: grab; touch-action: none;
+    background: radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.08));
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.7), inset 0 0 0 1px rgba(255, 255, 255, 0.25); }
+  .dial svg { position: absolute; inset: 0; width: 100%; height: 100%; transition: transform 0.12s linear; }
+
+  .toggle { all: unset; display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px;
+    border-radius: 999px; cursor: pointer; font-size: 13px; font-weight: 600; background: rgba(0, 0, 0, 0.18); }
+  .toggle .dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.4); transition: background 0.25s, box-shadow 0.25s; }
+  .toggle[aria-checked="true"] .dot { background: #8ff07a; box-shadow: 0 0 8px #8ff07a; }
+  .linkbtn { all: unset; cursor: pointer; font-size: 13px; color: var(--fg-dim); min-height: 36px; padding: 0 4px; }
+  .linkbtn:hover { color: #fff; }
+
+  .fine { display: grid; gap: 2px; }
+  .fine[hidden] { display: none; }
+  .fine label { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 8px; font-size: 13px; }
+  .fine output { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-dim); }
+  .mini { -webkit-appearance: none; appearance: none; width: 100%; height: 36px; background: transparent; margin: 0; }
+  .mini::-webkit-slider-runnable-track { height: 4px; border-radius: 99px; background: rgba(255, 255, 255, 0.35); }
+  .mini::-moz-range-track { height: 4px; border-radius: 99px; background: rgba(255, 255, 255, 0.35); }
+  .mini::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; margin-top: -8px; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
+  .mini::-moz-range-thumb { width: 18px; height: 18px; border: 0; border-radius: 50%; background: #fff; }
+
+  .btn { all: unset; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px;
+    padding: 0 18px; border-radius: 999px; cursor: pointer; font-weight: 600; font-size: 14px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.16));
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.85), 0 6px 16px -6px rgba(0, 0, 0, 0.4);
+    transition: transform 0.15s var(--ease-out), opacity 0.2s; }
+  .btn:active { transform: scale(0.96); }
+  .btn[disabled] { opacity: 0.45; pointer-events: none; }
+  .progress { position: relative; height: 44px; flex: 1; border-radius: 999px; overflow: hidden; background: rgba(0, 0, 0, 0.2);
+    display: none; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; }
+  .progress i { position: absolute; inset: 0; transform-origin: left; transform: scaleX(0);
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.45)); transition: transform 0.2s linear; }
+  .progress span { position: relative; }
+  .exporting .progress { display: flex; }
+  .exporting .export-actions { display: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before { transition-duration: 0.01ms !important; }
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="liquid" x="0" y="0" width="100%" height="100%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.009 0.012" numOctaves="2" seed="3" result="n" />
+    <feGaussianBlur in="n" stdDeviation="2" result="nb" />
+    <feDisplacementMap in="SourceGraphic" in2="nb" scale="38" xChannelSelector="R" yChannelSelector="G" />
+  </filter>
+</svg>
+
+<div id="status">Growing meadow…</div>
+
+<div id="dock" class="glass" data-open="false">
+  <div class="barRow">
+  <button id="dockBar" aria-expanded="false" aria-controls="dockBody" aria-label="Show meadow controls">
+    <span class="chip">
+      <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <b id="barTime">--:--</b><span class="muted" id="barTod"></span>
+    </span>
+    <span class="sep" aria-hidden="true"></span>
+    <span class="chip">
+      <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h10a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/></svg>
+      <span id="barWind">Breeze</span>
+    </span>
+    <span class="grow"></span>
+    <span class="chev"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></span>
+  </button>
+  <button class="iconbtn" id="soundBtn" aria-pressed="false" aria-label="Sound">
+    <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path class="on" d="M15.5 9a4.5 4.5 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11"/><path class="off" d="M16 9.5l5 5M21 9.5l-5 5"/></svg>
+  </button>
+  </div>
+
+  <div id="dockBody"><div><div class="sections">
+    <section aria-label="Time of day">
+      <div class="row between">
+        <span class="label">Time of day · <span id="panelTod"></span></span>
+        <button class="toggle" id="liveToggle" role="switch" aria-checked="true" title="Follow this device's clock">
+          <span class="dot" aria-hidden="true"></span>Live
+        </button>
+      </div>
+      <input class="sky" id="timeSlider" type="range" min="0" max="24" step="0.05" value="17.8" aria-label="Time of day" />
+    </section>
+
+    <section aria-label="Wind">
+      <div class="row between" style="margin-bottom:8px">
+        <span class="label">Wind</span>
+        <button class="linkbtn" id="fineToggle" aria-expanded="false" aria-controls="fine">Fine-tune</button>
+      </div>
+      <div class="row">
+        <div class="seg" id="windSeg" role="radiogroup" aria-label="Wind preset">
+          <span class="pill" aria-hidden="true"></span>
+          <button role="radio" data-v="calm">Calm</button>
+          <button role="radio" data-v="breeze">Breeze</button>
+          <button role="radio" data-v="gusty">Gusty</button>
+          <button role="radio" data-v="storm">Storm</button>
+        </div>
+        <div class="dial" id="dial" role="slider" tabindex="0" aria-label="Wind direction" aria-valuemin="0" aria-valuemax="359" aria-valuenow="15">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M13 24h20m-6-6 6 6-6 6" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+      </div>
+      <div class="fine" id="fine" hidden>
+        <label>Strength <input class="mini" id="fStrength" type="range" min="0" max="9" step="0.1" /><output></output></label>
+        <label>Gusts <input class="mini" id="fGust" type="range" min="0" max="1" step="0.01" /><output></output></label>
+        <label>Turbulence <input class="mini" id="fTurb" type="range" min="0" max="1" step="0.01" /><output></output></label>
+      </div>
+    </section>
+
+    <section aria-label="Export loop" id="exportSec">
+      <div class="row between" style="margin-bottom:8px">
+        <span class="label">Export loop</span>
+        <span class="muted" id="exportNote" style="font-size:12px">Seamless</span>
+      </div>
+      <div class="row">
+        <div class="seg" id="lenSeg" role="radiogroup" aria-label="Loop length" style="flex:0 0 132px">
+          <span class="pill" aria-hidden="true"></span>
+          <button role="radio" data-v="6">6s</button>
+          <button role="radio" data-v="10">10s</button>
+        </div>
+        <div class="row export-actions" style="flex:1;justify-content:flex-end">
+          <button class="btn" id="mp4Btn">MP4</button>
+          <button class="btn" id="gifBtn">GIF</button>
+        </div>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="progress"><i></i><span id="progressText">Preparing…</span></div>
+      </div>
+      <div class="row" id="saveRow" hidden style="margin-top:10px">
+        <button class="btn" id="saveBtn" style="flex:1">Save</button>
+      </div>
+    </section>
+    <button class="linkbtn" id="creditsToggle" aria-expanded="false" aria-controls="credits" style="font-size:12px;justify-self:start">Sound credits</button>
+    <ul class="credits" id="credits" hidden></ul>
+  </div></div></div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.171.0/build/three.module.min.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ========================================================================== */
+/*  Config                                                                    */
+/* ========================================================================== */
+const params = new URLSearchParams(location.search);
+const num = (k, d) => (params.has(k) ? parseFloat(params.get(k)) : d);
+
+const CAPTURE = params.get('capture') === '1';
+const SEED = num('seed', 7);
+const DENSITY = num('density', 24000);        // grass blades per m² of visible ground (near the camera)
+// The visible ground grows with the screen (a wide desktop window sees ~3× a phone's area), so the meadow
+// is held to a fixed budget; beyond it density is scaled down evenly. Physics and drawing cost follow N.
+const BLADE_BUDGET = num('blades', 70000);
+const FRAME = { w: num('w', 1062), h: num('h', 2000) };   // headless capture size
+const LIVE_LOOP = 60;                         // live wind repeats every minute (unnoticeable)
+if (params.get('ui') === '0' || CAPTURE) document.body.classList.add('no-ui');
+
+// Camera roughly matching the reference photo: handheld, ~1 m up, looking steeply down a meadow.
+const CAM = { height: 0.7, pitch: -24, vfov: 64 };
+const NEAR_FIELD = 7;                 // metres of real physics grass; beyond it the hills are painted by the ground shader
+
+// Grass species: each grows differently and responds to wind differently.
+//   len/width in metres, freq = natural sway in Hz, zeta = damping ratio, couple = how tangled a tuft is,
+//   flutter = leaf shimmer, drag = how much wind it catches, lodge = how much it lies over.
+const SPECIES = {
+  rye:    { share: 0.45, len: [0.13, 0.28], width: [0.0045, 0.0085], freq: [1.4, 2.4], zeta: [0.10, 0.18],
+            couple: 38, flutter: 1.0, drag: 1.0, lodge: 1.0, fan: [0.12, 0.35], radius: [0.32, 0.55], count: 1.0,
+            twist: 1.4, mid: '#7cc22e', tip: '#dcf27e', stalks: 0.12 },          // soft, floppy, glossy
+  fescue: { share: 0.30, len: [0.1, 0.22], width: [0.0018, 0.0032], freq: [2.6, 3.6], zeta: [0.18, 0.28],
+            couple: 75, flutter: 0.5, drag: 0.75, lodge: 0.25, fan: [0.06, 0.2], radius: [0.2, 0.32], count: 1.5,
+            twist: 0.5, mid: '#62a83e', tip: '#b8dc88', stalks: 0.1 },          // stiff, upright, blue-green
+  bent:   { share: 0.25, len: [0.08, 0.18], width: [0.0015, 0.0028], freq: [2.0, 3.2], zeta: [0.06, 0.12],
+            couple: 10, flutter: 2.6, drag: 1.35, lodge: 0.6, fan: [0.25, 0.55], radius: [0.45, 0.7], count: 1.5,
+            twist: 2.2, mid: '#96cc3c', tip: '#ecf6a2', stalks: 0.07 },           // fine, light, wispy
+};
+const KIND = { grass: 0, stalk: 1, plantain: 2, dandelion: 3, globe: 4, spike: 5, dot: 6 };
+
+// Wind presets: mean speed (m/s), gustiness and turbulence (0..1).
+const WIND_PRESETS = {
+  calm:   { speed: 0.8, gust: 0.35, turb: 0.3 },
+  breeze: { speed: 2.4, gust: 0.6, turb: 0.45 },
+  gusty:  { speed: 3.4, gust: 1.0, turb: 0.7 },
+  storm:  { speed: 6.5, gust: 1.0, turb: 1.0 },
+};
+const wind = { ...WIND_PRESETS.breeze, preset: 'breeze', dirDeg: 15, dir: new THREE.Vector2() };
+const setWindDir = (deg) => { wind.dirDeg = ((deg % 360) + 360) % 360; wind.dir.set(Math.cos(wind.dirDeg * Math.PI / 180), Math.sin(wind.dirDeg * Math.PI / 180)); };
+setWindDir(wind.dirDeg);
+
+// 60 Hz is stable for the stiffest blade (ω·dt ≈ 0.41 ≪ 2 for semi-implicit Euler) at half the cost of 120 Hz.
+const PHYS = { substepHz: 60 };
+
+const statusEl = document.getElementById('status');
+const setStatus = (msg, hideAfter = 0) => {
+  statusEl.textContent = msg;
+  statusEl.classList.remove('hidden');
+  if (hideAfter) setTimeout(() => statusEl.classList.add('hidden'), hideAfter);
+};
+if (CAPTURE) statusEl.style.display = 'none';
+
+/* ========================================================================== */
+/*  Deterministic randomness + 2D simplex noise (CPU side)                    */
+/* ========================================================================== */
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+let rand = mulberry32(SEED);
+const range = (a, b) => a + (b - a) * rand();
+const pick = (r) => range(r[0], r[1]);
+const gauss = () => Math.sqrt(-2 * Math.log(rand() || 1e-9)) * Math.cos(2 * Math.PI * rand());
+
+const perm = new Uint8Array(512);
+{
+  const p = Array.from({ length: 256 }, (_, i) => i);
+  for (let i = 255; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [p[i], p[j]] = [p[j], p[i]]; }
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+}
+const GRAD = [[1, 1], [-1, 1], [1, -1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]];
+const F2 = 0.5 * (Math.sqrt(3) - 1), G2 = (3 - Math.sqrt(3)) / 6;
+function noise2(x, y) {
+  const s = (x + y) * F2, i = Math.floor(x + s), j = Math.floor(y + s);
+  const t = (i + j) * G2, x0 = x - (i - t), y0 = y - (j - t);
+  const i1 = x0 > y0 ? 1 : 0, j1 = 1 - i1;
+  const x1 = x0 - i1 + G2, y1 = y0 - j1 + G2, x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
+  const ii = i & 255, jj = j & 255;
+  let n = 0, c;
+  if ((c = 0.5 - x0 * x0 - y0 * y0) > 0) { const g = GRAD[perm[ii + perm[jj]] & 7]; c *= c; n += c * c * (g[0] * x0 + g[1] * y0); }
+  if ((c = 0.5 - x1 * x1 - y1 * y1) > 0) { const g = GRAD[perm[ii + i1 + perm[jj + j1]] & 7]; c *= c; n += c * c * (g[0] * x1 + g[1] * y1); }
+  if ((c = 0.5 - x2 * x2 - y2 * y2) > 0) { const g = GRAD[perm[ii + 1 + perm[jj + 1]] & 7]; c *= c; n += c * c * (g[0] * x2 + g[1] * y2); }
+  return 70 * n;
+}
+function fbm2(x, y, oct = 3) {
+  let v = 0, a = 0.5;
+  for (let o = 0; o < oct; o++) { v += a * noise2(x, y); x = x * 2.03 + 17.1; y = y * 2.03 - 9.7; a *= 0.5; }
+  return v;
+}
+const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+
+// Ground: hummocky meadow near the camera, rolling hills rising behind (they fill the top of the frame).
+function terrainH(x, z) {
+  const d = Math.hypot(x, z), far = smoothstep(5, 70, d);
+  const mounds = 0.16 * fbm2(x * 0.55 + 31, z * 0.55 - 17, 2);
+  const hills = 7 * fbm2(x * 0.02 + 3, z * 0.02 - 7, 3) + 24 * smoothstep(12, 140, -z);
+  return mounds * (1 - 0.6 * far) + hills * far;
+}
+
+/* ========================================================================== */
+/*  Camera + the patch of ground it can see                                   */
+/* ========================================================================== */
+const aspect = CAPTURE ? FRAME.w / FRAME.h : window.innerWidth / window.innerHeight;
+const camera = new THREE.PerspectiveCamera(CAM.vfov, aspect, 0.02, 600);
+camera.position.set(0, CAM.height + terrainH(0, 0), 0);
+camera.rotation.x = THREE.MathUtils.degToRad(CAM.pitch);
+camera.updateMatrixWorld();
+
+// Intersect the frustum corners with the ground; plants are only grown where they can be seen.
+function groundFootprint(margin) {
+  const pts = [];
+  const ray = new THREE.Raycaster();
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  for (const [x, y] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+    ray.setFromCamera(new THREE.Vector2(x * 1.08, y * 1.08), camera);
+    const hit = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(plane, hit) || hit.distanceTo(camera.position) > NEAR_FIELD) {
+      hit.copy(ray.ray.direction).multiplyScalar(NEAR_FIELD).add(camera.position).setY(0);
+    }
+    pts.push(new THREE.Vector2(hit.x, hit.z));
+  }
+  const c = pts.reduce((a, p) => a.add(p), new THREE.Vector2()).multiplyScalar(0.25);
+  return pts.map((p) => p.clone().add(p.clone().sub(c).normalize().multiplyScalar(margin)));
+}
+const footprint = groundFootprint(0.32);
+{
+  let area = 0;
+  for (let i = 0; i < 4; i++) { const a = footprint[i], b = footprint[(i + 1) % 4]; area += a.x * b.y - b.x * a.y; }
+  if (area < 0) footprint.reverse();
+}
+const insideQuad = (x, z) => {
+  for (let i = 0; i < 4; i++) {
+    const a = footprint[i], b = footprint[(i + 1) % 4];
+    if ((b.x - a.x) * (z - a.y) - (b.y - a.y) * (x - a.x) < 0) return false;
+  }
+  return true;
+};
+const bbox = footprint.reduce((b, p) => b.expandByPoint(p), new THREE.Box2());
+
+/* ========================================================================== */
+/*  Growing the meadow                                                        */
+/* ========================================================================== */
+const linear = (hex) => new THREE.Color(hex);    // THREE.Color stores linear values
+
+// Species form patches (as in real swards), chosen by a smooth noise field. fBM values bunch up
+// around 0, so the cut-offs are taken from the field's own distribution to honour each share.
+const speciesNoise = (x, z) => fbm2(x * 1.4 + 71, z * 1.4 - 33, 2);
+const speciesCuts = (() => {
+  const samples = [];
+  for (let j = 0; j < 60; j++) for (let i = 0; i < 60; i++) {
+    samples.push(speciesNoise(bbox.min.x + (bbox.max.x - bbox.min.x) * i / 59, bbox.min.y + (bbox.max.y - bbox.min.y) * j / 59));
+  }
+  samples.sort((a, b) => a - b);
+  const q = (p) => samples[Math.min(samples.length - 1, Math.floor(p * samples.length))];
+  return [q(SPECIES.bent.share), q(SPECIES.bent.share + SPECIES.fescue.share)];
+})();
+function pickSpecies(x, z) {
+  const m = speciesNoise(x, z) + (rand() - 0.5) * 0.06;   // slightly ragged patch borders
+  if (m < speciesCuts[0]) return 'bent';
+  if (m < speciesCuts[1]) return 'fescue';
+  return 'rye';
+}
+
+// Distant grass covers only a few pixels: grow it sparser (and a little wider so the cover stays dense).
+const farThin = (x, z) => clamp(1.2 / (0.2 + Math.hypot(x, z)), 0.12, 1);
+
+function growMeadow(densityScale = 1) {
+  const plants = [];   // one entry per simulated blade/leaf/stalk
+  const spacing = 0.085;
+  let clumpId = 0;
+
+  const add = (p) => plants.push(p);
+  const flutterHz = () => [range(4, 7), range(4.5, 7.5), rand() * 6.283, rand() * 6.283];
+
+  for (let gz = bbox.min.y; gz < bbox.max.y; gz += spacing) {
+    for (let gx = bbox.min.x; gx < bbox.max.x; gx += spacing) {
+      const cx = gx + range(0, spacing), cz = gz + range(0, spacing);
+      if (!insideQuad(cx, cz)) continue;
+
+      // Broadleaf rosettes take over a few patches (plantain / dandelion, low and stiff).
+      if (rand() < 0.035 + 0.06 * smoothstep(2.5, 0.6, Math.hypot(cx, cz))) {
+        const kind = rand() < 0.5 ? KIND.plantain : KIND.dandelion;
+        const leaves = Math.round(range(5, 9));
+        const rot = rand() * 6.283;
+        const id = clumpId++;
+        for (let l = 0; l < leaves; l++) {
+          const ang = rot + (l / leaves) * 6.283 + gauss() * 0.15;
+          const near = smoothstep(3, 0.8, Math.hypot(cx, cz));
+          const L = range(0.07, 0.14) * (1 + 1.4 * near), fall = range(0.35, 0.7);
+          const omega = 2 * Math.PI * range(3.5, 5);
+          add({
+            rx: cx, rz: cz, L, restX: Math.cos(ang) * fall * L, restZ: Math.sin(ang) * fall * L,
+            k: omega * omega, c: 2 * 0.35 * omega, drag: 0.12, couple: 25, flutter: 0.2, clump: id,
+            width: (kind === KIND.plantain ? range(0.018, 0.03) : range(0.014, 0.024)) * (1 + 1.4 * near),
+            yaw: ang + Math.PI / 2, twist: 0, kind, hue: rand(), dry: 0, shade: range(0.75, 0.95),
+            mid: linear('#7fc23a'), tip: linear('#c4ec6c'), fl: flutterHz(),
+          });
+        }
+        continue;
+      }
+
+      const spName = pickSpecies(cx, cz), sp = SPECIES[spName];
+      // Swirling "lodging" field: where grass has fallen over, and which way (cowlicks in the photo).
+      const flowAngle = 0.25 + 2.6 * fbm2(cx * 1.1 + 40, cz * 1.1, 3);
+      const lodge = sp.lodge * 0.45 * smoothstep(-0.45, 0.35, fbm2(cx * 0.9 - 13, cz * 0.9 + 5, 3) + 0.25 * smoothstep(-1.2, 0, cz));
+      const lenScale = 0.8 + 0.4 * smoothstep(-0.5, 0.5, fbm2(cx * 1.6, cz * 1.6 + 99, 2));
+      const sparse = rand() < 0.1;                       // gaps between tufts → dark pockets
+      const thin = farThin(cx, cz), widen = 1 / Math.sqrt(thin);
+      const count = Math.round(DENSITY * densityScale * thin * spacing * spacing * sp.count * (sparse ? 0.15 : range(0.6, 1.4)) * (0.006 / ((sp.width[0] + sp.width[1]) / 2 + 0.003)));
+      const radius = spacing * pick(sp.radius);
+      const shade = range(0.75, 1.0);                    // tuft-level brightness variation
+      const tuftStiff = range(0.85, 1.2);                // whole tufts differ: some stiffer, some softer
+      const id = clumpId++;
+      const mid = linear(sp.mid), tip = linear(sp.tip);
+
+      for (let b = 0; b < count; b++) {
+        const ox = gauss() * radius, oz = gauss() * radius;
+        const thatch = rand() < 0.06;                    // dead blades lying in the base
+        const L = (thatch ? range(0.4, 0.8) : range(0.75, 1.2)) * pick(sp.len) * lenScale * (0.45 + 0.55 * thin);
+
+        // Rest pose of the tip: fan out from the tuft centre + lie over along the swirl field.
+        const off = Math.hypot(ox, oz) || 1;
+        const fall = thatch ? range(0.85, 0.95) : Math.min(0.92, lodge * range(0.5, 1.15) + range(0, 0.12));
+        const fan = pick(sp.fan) * (1 - fall);
+        const ang = flowAngle + gauss() * 0.45;
+        const omega = 2 * Math.PI * Math.max(0.9, pick(sp.freq) * tuftStiff - 2.0 * (L - 0.2));
+        const v = 0.85 + 0.3 * rand();
+        add({
+          rx: cx + ox, rz: cz + oz, L,
+          restX: L * (Math.cos(ang) * fall + (ox / off) * fan), restZ: L * (Math.sin(ang) * fall + (oz / off) * fan),
+          k: omega * omega, c: 2 * pick(sp.zeta) * omega,
+          drag: sp.drag * (1 - 0.6 * fall) * (thatch ? 0.1 : 1), couple: sp.couple, flutter: sp.flutter, clump: id,
+          width: (thatch ? range(0.003, 0.005) : pick(sp.width)) * widen,
+          yaw: ang + Math.PI / 2 + gauss() * 0.5, twist: gauss() * sp.twist,
+          kind: KIND.grass, species: spName, hue: rand(), dry: thatch ? 1 : (rand() < 0.04 ? range(0.3, 0.7) : 0), shade: shade * range(0.8, 1.05),
+          mid: mid.clone().multiplyScalar(v), tip: tip.clone().multiplyScalar(0.9 + 0.2 * rand()), fl: flutterHz(),
+        });
+      }
+
+      // Seed-head stalks: taller than the canopy, heavy heads → slow, nodding pendulum sway.
+      // Wildflowers grow in drifts: pink globe heads, violet spikes and tiny white/lilac dots.
+      const drift = smoothstep(-0.25, 0.45, fbm2(cx * 0.45 + 9, cz * 0.45 - 4, 2));
+      if (!sparse && rand() < 0.65 * drift + 0.3 * smoothstep(3.2, 0.9, Math.hypot(cx, cz))) {   // + a foreground cluster, as in the photo
+        const n = Math.round(range(1, 4.4));
+        for (let f = 0; f < n; f++) {
+          const r = rand(), kind = r < 0.55 ? KIND.globe : r < 0.75 ? KIND.spike : KIND.dot;
+          const L = (kind === KIND.dot ? range(0.2, 0.38) : range(0.34, 0.62)) * (0.6 + 0.4 * thin);
+          const head = kind === KIND.globe ? range(0.011, 0.016) : kind === KIND.spike ? range(0.0065, 0.009) : range(0.004, 0.0065);
+          const ang = flowAngle + gauss() * 0.8, lean = range(0.05, 0.25), omega = 2 * Math.PI * range(0.8, 1.4);
+          const pal = kind === KIND.globe ? ['#e48bbf', '#d97ab0', '#f0a6cf', '#c98ad6'] : kind === KIND.spike ? ['#7c78e0', '#8f86ea', '#6d74d8'] : ['#f4eef8', '#cdb6f2', '#e7d7f5'];
+          add({
+            rx: cx + gauss() * radius * 0.6, rz: cz + gauss() * radius * 0.6, L,
+            restX: Math.cos(ang) * lean * L, restZ: Math.sin(ang) * lean * L,
+            k: omega * omega, c: 2 * range(0.07, 0.12) * omega, drag: 0.2, couple: 0, flutter: 0.7, clump: -1,
+            width: range(0.0016, 0.0024), yaw: rand() * 6.283, twist: 0,
+            kind, hue: rand(), dry: head, shade: 1,      // flowers: aLook.y carries the head radius (m)
+            mid: linear('#5f9c34'), tip: linear(pal[Math.floor(rand() * pal.length)]), fl: flutterHz(),
+          });
+        }
+      }
+
+      if (!sparse && rand() < sp.stalks) {
+        const n = Math.round(range(1, 2.6));
+        for (let s = 0; s < n; s++) {
+          const L = range(0.32, 0.55), ang = flowAngle + gauss() * 0.7, lean = range(0.15, 0.4);
+          const omega = 2 * Math.PI * range(0.65, 1.1);
+          add({
+            rx: cx + gauss() * radius * 0.5, rz: cz + gauss() * radius * 0.5, L,
+            restX: Math.cos(ang) * lean * L, restZ: Math.sin(ang) * lean * L,
+            // Stiff stem + heavy head: leans ~25% of its length in a breeze, flattens only in a storm.
+            k: omega * omega, c: 2 * range(0.06, 0.1) * omega, drag: 0.16, couple: 0, flutter: 0.6, clump: -1,
+            width: range(0.0016, 0.0024), yaw: rand() * 6.283, twist: 0,
+            kind: KIND.stalk, hue: rand(), dry: 0, shade: 1,
+            mid: linear('#6f9a38'), tip: linear(rand() < 0.6 ? '#9fa45e' : '#8a8460'), fl: flutterHz(),
+          });
+        }
+      }
+    }
+  }
+  return { plants, clumps: clumpId };
+}
+
+const growWith = (scale) => { rand = mulberry32(SEED + 101); return growMeadow(scale); };
+let grown = growWith(1);
+if (grown.plants.length > BLADE_BUDGET) grown = growWith(BLADE_BUDGET / grown.plants.length);
+const { plants, clumps: CLUMPS } = grown;
+const N = plants.length;
+
+/* ========================================================================== */
+/*  Canopy structure: density + height grids                                  */
+/* ========================================================================== */
+const GRID = 32;                  // ~8 cm cells: finer than the smallest gust band (~0.7 m)
+const gx0 = bbox.min.x, gz0 = bbox.min.y;
+const gdx = (bbox.max.x - bbox.min.x) / (GRID - 1), gdz = (bbox.max.y - bbox.min.y) / (GRID - 1);
+const cellOf = (x, z) => clamp(Math.round((z - gz0) / gdz), 0, GRID - 1) * GRID + clamp(Math.round((x - gx0) / gdx), 0, GRID - 1);
+
+const density = new Float32Array(GRID * GRID), canopyH = new Float32Array(GRID * GRID), canopyW = new Float32Array(GRID * GRID);
+for (const p of plants) {
+  const c = cellOf(p.rx, p.rz);
+  const frontal = p.L * p.width;                 // area the wind has to push through
+  density[c] += frontal; canopyH[c] += p.L * frontal; canopyW[c] += frontal;
+}
+{
+  let sum = 0, n = 0;
+  for (let i = 0; i < density.length; i++) {
+    canopyH[i] = canopyW[i] > 0 ? canopyH[i] / canopyW[i] : 0.15;
+    if (density[i] > 0) { sum += density[i]; n++; }
+  }
+  const mean = sum / Math.max(n, 1);
+  for (let i = 0; i < density.length; i++) density[i] /= mean;   // 1 = an average patch
+}
+
+// Wind is attenuated by dense canopy upwind ("shelter"), and gets turbulent in the wake behind it.
+const shelter = new Float32Array(GRID * GRID);
+function computeShelter() {
+  const step = 0.06;
+  for (let j = 0; j < GRID; j++) {
+    for (let i = 0; i < GRID; i++) {
+      const x = gx0 + i * gdx, z = gz0 + j * gdz;
+      let occ = 0;
+      for (let s = 1; s <= 8; s++) {
+        occ += density[cellOf(x - wind.dir.x * step * s, z - wind.dir.y * step * s)] * Math.exp(-s / 3.5);
+      }
+      shelter[j * GRID + i] = Math.exp(-0.32 * Math.max(0, occ - 1.2));
+    }
+  }
+}
+computeShelter();
+
+/* ========================================================================== */
+/*  Physics state (struct-of-arrays)                                          */
+/* ========================================================================== */
+const S = {
+  rx: new Float32Array(N), rz: new Float32Array(N), L: new Float32Array(N),
+  restX: new Float32Array(N), restZ: new Float32Array(N),
+  k: new Float32Array(N), c: new Float32Array(N), exp: new Float32Array(N), kc: new Float32Array(N), fl: new Float32Array(N),
+  clump: new Int32Array(N),
+  hzA: new Float32Array(N), hzB: new Float32Array(N), fA: new Float32Array(N), fB: new Float32Array(N),
+  phA: new Float32Array(N), phB: new Float32Array(N),
+  dx: new Float32Array(N), dz: new Float32Array(N), vx: new Float32Array(N), vz: new Float32Array(N),
+};
+const clumpSumX = new Float32Array(CLUMPS), clumpSumZ = new Float32Array(CLUMPS), clumpN = new Float32Array(CLUMPS);
+plants.forEach((p, i) => {
+  S.rx[i] = p.rx; S.rz[i] = p.rz; S.L[i] = p.L; S.restX[i] = p.restX; S.restZ[i] = p.restZ;
+  S.k[i] = p.k; S.c[i] = p.c; S.kc[i] = p.couple; S.fl[i] = p.flutter; S.clump[i] = p.clump;
+  // Blades that poke above the local canopy catch the full wind; those inside it are sheltered.
+  const rel = p.L / Math.max(canopyH[cellOf(p.rx, p.rz)], 0.05);
+  S.exp[i] = p.drag * (p.L / 0.25) * clamp(Math.pow(rel, 1.5), 0.3, 1.8);
+  [S.hzA[i], S.hzB[i], S.phA[i], S.phB[i]] = p.fl;
+  if (p.clump >= 0) clumpN[p.clump]++;
+});
+
+let LOOP = LIVE_LOOP;
+// Flutter frequencies are snapped to whole cycles per loop so exported loops are exactly periodic.
+function setLoop(seconds) {
+  LOOP = seconds;
+  for (let i = 0; i < N; i++) {
+    S.fA[i] = (2 * Math.PI * Math.max(1, Math.round(S.hzA[i] * LOOP))) / LOOP;
+    S.fB[i] = (2 * Math.PI * Math.max(1, Math.round(S.hzB[i] * LOOP))) / LOOP;
+  }
+}
+setLoop(LIVE_LOOP);
+
+/* ========================================================================== */
+/*  Wind field                                                                */
+/* ========================================================================== */
+const windU = new Float32Array(GRID * GRID), windV = new Float32Array(GRID * GRID), windG = new Float32Array(GRID * GRID);
+
+function windAt(x, z, t, sh, out) {
+  const dx = wind.dir.x, dz = wind.dir.y;
+  const along = x * dx + z * dz, across = -x * dz + z * dx;
+  // Gust fronts: bands across the wind, travelling downwind (the rolling waves you see over a meadow).
+  const front = 1.0 + 0.55 * wind.speed;
+  const n = fbm2((along - front * t) * 1.5, across * 0.55, 3);
+  const g = smoothstep(-0.2, 0.5, n);
+  // Gust/lull cycle: broad surges (~11 m across, a few seconds long) carry the small bands, so the
+  // whole field builds, leans together and relaxes — instead of a constant busy shimmer.
+  const surge = smoothstep(-0.3, 0.4, fbm2((along - front * t) * 0.09 + 13.7, across * 0.05 - 4.2, 2));
+  const cycle = 1 + wind.gust * (1.25 * surge - 0.55);
+  const speed = wind.speed * cycle * (1 - 0.65 * wind.gust + 1.7 * wind.gust * g) * (0.45 + 0.55 * sh);
+  // Turbulence: veering direction plus small eddies, stronger in the wake of dense tufts.
+  const wake = 1 + 1.6 * (1 - sh);
+  const veer = wind.turb * wake * 0.7 * fbm2(x * 0.8 + t * 0.21, z * 0.8 - t * 0.17 + 31, 2);
+  const cs = Math.cos(veer), sn = Math.sin(veer);
+  const eddy = wind.turb * wake * 0.35 * wind.speed;
+  out[0] = speed * (dx * cs - dz * sn) + eddy * noise2(x * 3.1 + t * 0.9, z * 3.1 - 7);
+  out[1] = speed * (dx * sn + dz * cs) + eddy * noise2(x * 3.1 - 19, z * 3.1 + t * 0.9);
+  out[2] = Math.min(1, g * cycle);
+}
+
+// Exactly periodic wind: blend the field at t with the field at t − LOOP (energy-preserving weights).
+const wA = [0, 0, 0], wB = [0, 0, 0];
+function updateWindGrid(time) {
+  const tA = ((time % LOOP) + LOOP) % LOOP, tB = tA - LOOP;
+  const k = tA / LOOP, norm = Math.hypot(1 - k, k);
+  const a = (1 - k) / norm, b = k / norm;
+  for (let j = 0; j < GRID; j++) {
+    for (let i = 0; i < GRID; i++) {
+      const x = gx0 + i * gdx, z = gz0 + j * gdz, idx = j * GRID + i, sh = shelter[idx];
+      windAt(x, z, tA, sh, wA); windAt(x, z, tB, sh, wB);
+      windU[idx] = a * wA[0] + b * wB[0];
+      windV[idx] = a * wA[1] + b * wB[1];
+      windG[idx] = Math.min(1, a * wA[2] + b * wB[2]);
+    }
+  }
+}
+
+/* ========================================================================== */
+/*  Physics step: every blade tip is a damped spring pushed by air drag       */
+/* ========================================================================== */
+const pointer = { x: 0, z: 0, strength: 0, target: 0 };
+
+function stepPhysics(t, dt) {
+  const { rx, rz, L, restX, restZ, k, c, exp, kc, fl, clump, fA, fB, phA, phB, dx, dz, vx, vz } = S;
+  clumpSumX.fill(0); clumpSumZ.fill(0);
+  for (let i = 0; i < N; i++) { const cl = clump[i]; if (cl >= 0) { clumpSumX[cl] += dx[i]; clumpSumZ[cl] += dz[i]; } }
+
+  const pr2 = 0.18 * 0.18;
+  for (let i = 0; i < N; i++) {
+    let fx = (rx[i] - gx0) / gdx, fz = (rz[i] - gz0) / gdz;
+    fx = Math.min(GRID - 1.001, Math.max(0, fx)); fz = Math.min(GRID - 1.001, Math.max(0, fz));
+    const ix = fx | 0, iz = fz | 0, tx = fx - ix, tz = fz - iz, i00 = iz * GRID + ix;
+    const w00 = (1 - tx) * (1 - tz), w10 = tx * (1 - tz), w01 = (1 - tx) * tz, w11 = tx * tz;
+    const wu = windU[i00] * w00 + windU[i00 + 1] * w10 + windU[i00 + GRID] * w01 + windU[i00 + GRID + 1] * w11;
+    const wv = windV[i00] * w00 + windV[i00 + 1] * w10 + windV[i00 + GRID] * w01 + windV[i00 + GRID + 1] * w11;
+    const wg = windG[i00] * w00 + windG[i00 + 1] * w10 + windG[i00 + GRID] * w01 + windG[i00 + GRID + 1] * w11;
+
+    // Quadratic aerodynamic drag on the tip, relative to its own velocity.
+    const ru = wu - vx[i], rv = wv - vz[i];
+    const rm = Math.sqrt(ru * ru + rv * rv);
+    const e = exp[i] * 0.85;
+    let ax = e * ru * rm, az = e * rv * rm;
+
+    // Tuft cohesion: tangled blades get dragged along with their neighbours.
+    const cl = clump[i];
+    if (cl >= 0) {
+      const inv = 1 / clumpN[cl];
+      ax += kc[i] * (clumpSumX[cl] * inv - dx[i]);
+      az += kc[i] * (clumpSumZ[cl] * inv - dz[i]);
+    }
+
+    // Elastic restoring force + internal damping.
+    ax -= k[i] * dx[i] + c[i] * vx[i];
+    az -= k[i] * dz[i] + c[i] * vz[i];
+
+    // Leaf flutter (vortex shedding) above the sway frequency, stronger inside gusts.
+    const f = fl[i] * exp[i] * (0.25 + wg) * (0.4 + 0.25 * wind.speed);
+    ax += f * Math.sin(fA[i] * t + phA[i]);
+    az += f * Math.sin(fB[i] * t + phB[i]);
+
+    if (pointer.strength > 0.01) {
+      const px = rx[i] - pointer.x, pz = rz[i] - pointer.z, d2 = px * px + pz * pz;
+      if (d2 < pr2) {
+        const p = pointer.strength * 60 * (1 - d2 / pr2) / (Math.sqrt(d2) + 0.02);
+        ax += px * p; az += pz * p;
+      }
+    }
+
+    vx[i] += ax * dt; vz[i] += az * dt;
+    dx[i] += vx[i] * dt; dz[i] += vz[i] * dt;
+
+    // Inextensible blade: the tip can lean but never travel further than its length.
+    const hx = restX[i] + dx[i], hz = restZ[i] + dz[i];
+    const hm = Math.sqrt(hx * hx + hz * hz), maxH = 0.96 * L[i];
+    if (hm > maxH) {
+      const s = maxH / hm, nx = hx / hm, nz = hz / hm;
+      dx[i] = hx * s - restX[i]; dz[i] = hz * s - restZ[i];
+      const vn = vx[i] * nx + vz[i] * nz;
+      if (vn > 0) { vx[i] -= vn * nx; vz[i] -= vn * nz; }
+    }
+  }
+}
+
+/* ========================================================================== */
+/*  Rendering                                                                 */
+/* ========================================================================== */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: CAPTURE });
+let DPR = CAPTURE ? 1 : Math.min(window.devicePixelRatio, 1.5);   // lowered automatically if frames run slow
+renderer.setPixelRatio(DPR);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color();
+scene.fog = new THREE.Fog(new THREE.Color(), 30, 320);
+
+const fieldCenter = new THREE.Vector3((bbox.min.x + bbox.max.x) / 2, 0, (bbox.min.y + bbox.max.y) / 2);
+const sun = new THREE.DirectionalLight();
+sun.target.position.copy(fieldCenter);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+{
+  const half = Math.max(bbox.max.x - bbox.min.x, bbox.max.y - bbox.min.y) * 0.62;
+  Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half, near: 0.5, far: 14 });
+}
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.0015;
+sun.shadow.radius = 2;
+const hemi = new THREE.HemisphereLight();
+scene.add(sun, sun.target, hemi);
+
+// Rolling hills: one terrain mesh; beyond the physics grass its shader paints grass, flowers and wind waves.
+const groundGeo = new THREE.PlaneGeometry(500, 500, 220, 220).rotateX(-Math.PI / 2).translate(0, 0, -220);
+{
+  const pos = groundGeo.attributes.position;
+  for (let i = 0; i < pos.count; i++) pos.setY(i, terrainH(pos.getX(i), pos.getZ(i)));
+  groundGeo.computeVertexNormals();
+}
+const groundMat = new THREE.MeshStandardMaterial({ roughness: 0.85 });
+groundMat.onBeforeCompile = (shader) => {
+  Object.assign(shader.uniforms, uniforms);
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
+    .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>
+      varying vec3 vWPos;
+      uniform vec3 uWind; uniform vec2 uLoop;
+      ${NOISE_GLSL}
+      float windWave(vec2 p, float t) {
+        vec2 wd = uWind.xy;
+        float along = dot(p, wd), across = dot(p, vec2(-wd.y, wd.x));
+        return snoise(vec2((along - (1.0 + 0.55 * uWind.z) * t) * 0.09, across * 0.04));
+      }`)
+    .replace('#include <color_fragment>', `
+      vec2 p = vWPos.xz;
+      float d = length(vWPos.xz - cameraPosition.xz);
+      float n = snoise(p * 0.07) * 0.55 + snoise(p * 0.5 + 7.0) * 0.3 + snoise(p * 3.0) * 0.15;
+      vec3 g = mix(vec3(0.15, 0.34, 0.04), vec3(0.48, 0.80, 0.10), smoothstep(-0.6, 0.7, n));
+      g *= 0.85 + 0.15 * snoise(vec2(p.x * 9.0, p.y * 2.5));            // blade striations
+      // Wildflower speckles, fading to a soft tint where they shrink below a pixel.
+      float drift = smoothstep(-0.1, 0.6, snoise(p * 0.12 + 3.0));
+      float h = fract(sin(dot(floor(p * 5.0), vec2(12.9898, 78.233))) * 43758.5453);
+      float spot = smoothstep(0.45, 0.1, length(fract(p * 5.0) - 0.5)) * step(1.0 - 0.12 * drift, h);
+      vec3 fc = h > 0.985 ? vec3(0.95, 0.92, 0.98) : (h > 0.95 ? vec3(0.75, 0.35, 0.62) : vec3(0.45, 0.38, 0.85));
+      float px = fwidth(p.x * 5.0);
+      g = mix(g, fc, spot * (1.0 - smoothstep(0.25, 0.8, px)) * 0.9);
+      g = mix(g, mix(g, vec3(0.55, 0.42, 0.75), 0.18), drift * smoothstep(0.25, 0.8, px) * 0.5);
+      // Gusts sweep over the hills as brighter waves; blended across the loop so exports stay seamless.
+      float k = uLoop.x / uLoop.y;
+      float wave = (windWave(p, uLoop.x) * (1.0 - k) + windWave(p, uLoop.x - uLoop.y) * k) / length(vec2(1.0 - k, k));
+      g = mix(g, g * 1.45 + vec3(0.04, 0.05, 0.0), smoothstep(0.05, 0.8, wave) * min(uWind.z / 3.0, 1.0) * 0.6);
+      g *= mix(0.3, 1.0, smoothstep(3.0, 8.0, d));                      // dark roots under the near physics grass
+      diffuseColor.rgb = g;`);
+};
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Stalks and flowers are drawn as crossed ribbons so their heads read from every angle. Instances are sorted
+// nearest-first: the GPU then skips shading grass hidden behind nearer grass (pixel-identical, much less work).
+const RIBBONS = { [KIND.stalk]: 2 };   // flowers face the camera instead (see bladeCompute)
+const inst = [];
+plants.forEach((p, i) => { for (let c = 0; c < (RIBBONS[p.kind] ?? 1); c++) inst.push([i, c, Math.hypot(p.rx, p.rz)]); });
+inst.sort((a, b) => a[2] - b[2]);
+const instToPlant = inst.map((e) => e[0]);
+const NI = inst.length;
+
+const SEGMENTS = 12;
+const template = new THREE.PlaneGeometry(1, 1, 1, SEGMENTS);
+const geometry = new THREE.InstancedBufferGeometry();
+geometry.index = template.index;
+geometry.setAttribute('position', template.getAttribute('position'));
+geometry.setAttribute('uv', template.getAttribute('uv'));
+geometry.setAttribute('normal', template.getAttribute('normal'));
+geometry.instanceCount = NI;
+
+const aRoot = new Float32Array(NI * 3), aShape = new Float32Array(NI * 4), aLook = new Float32Array(NI * 4);
+const aMid = new Float32Array(NI * 3), aTipCol = new Float32Array(NI * 3), aTip = new Float32Array(NI * 2);
+inst.forEach(([pi, copy], i) => {
+  const p = plants[pi];
+  aRoot.set([p.rx, terrainH(p.rx, p.rz), p.rz], i * 3);
+  aShape.set([p.L, p.width, p.yaw + copy * Math.PI / (RIBBONS[p.kind] ?? 1), p.twist], i * 4);
+  aLook.set([p.hue, p.dry, p.shade, p.kind], i * 4);
+  aMid.set([p.mid.r, p.mid.g, p.mid.b], i * 3);
+  aTipCol.set([p.tip.r, p.tip.g, p.tip.b], i * 3);
+  aTip.set([p.restX, p.restZ], i * 2);
+});
+geometry.setAttribute('aRoot', new THREE.InstancedBufferAttribute(aRoot, 3));
+geometry.setAttribute('aShape', new THREE.InstancedBufferAttribute(aShape, 4));
+geometry.setAttribute('aLook', new THREE.InstancedBufferAttribute(aLook, 4));
+geometry.setAttribute('aMid', new THREE.InstancedBufferAttribute(aMid, 3));
+geometry.setAttribute('aTipCol', new THREE.InstancedBufferAttribute(aTipCol, 3));
+const tipAttr = new THREE.InstancedBufferAttribute(aTip, 2).setUsage(THREE.DynamicDrawUsage);
+geometry.setAttribute('aTip', tipAttr);
+
+const NOISE_GLSL = /* glsl */ `
+vec3 permute3(vec3 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
+float snoise(vec2 v) {
+  const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+  vec2 i  = floor(v + dot(v, C.yy));
+  vec2 x0 = v - i + dot(i, C.xx);
+  vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+  vec4 x12 = x0.xyxy + C.xxzz;
+  x12.xy -= i1;
+  i = mod(i, 289.0);
+  vec3 p = permute3(permute3(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));
+  vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);
+  m = m * m; m = m * m;
+  vec3 x = 2.0 * fract(p * C.www) - 1.0;
+  vec3 h = abs(x) - 0.5;
+  vec3 ox = floor(x + 0.5);
+  vec3 a0 = x - ox;
+  m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+  vec3 g;
+  g.x  = a0.x * x0.x + h.x * x0.y;
+  g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+  return 130.0 * dot(m, g);
+}
+`;
+
+// Shared vertex code: each plant part is a quadratic Bézier from root to the physics-driven tip.
+const BLADE_VERTEX = /* glsl */ `
+attribute vec3 aRoot;    // root position on the ground
+attribute vec4 aShape;   // length, width, yaw, twist
+attribute vec4 aLook;    // hue variation, dryness, tuft shade, kind (0 grass, 1 stalk, 2 plantain, 3 dandelion)
+attribute vec3 aMid;     // body colour (linear)
+attribute vec3 aTipCol;  // tip / seed-head colour (linear)
+attribute vec2 aTip;     // horizontal tip offset from the physics sim
+#ifdef BLADE_VARYINGS
+varying float vT;
+varying float vSide;
+varying vec4 vLook;
+varying vec3 vWorld;
+varying vec3 vMid;
+varying vec3 vTipCol;
+varying float vHead;
+#endif
+
+float partWidth(float t, float kind) {
+  float w = aShape.y;
+  if (kind > 3.5) return w;                          // flower stem (its head is built in bladeCompute)
+  if (kind < 0.5) {                                   // grass leaf: long, tapering to a point
+    return w * (1.0 - smoothstep(0.35, 1.0, t) * 0.96) * (0.75 + 0.25 * smoothstep(0.0, 0.08, t));
+  } else if (kind < 1.5) {                            // stalk: thin stem, then a spikelet seed head
+    float head = smoothstep(0.66, 0.74, t) * pow(max(sin(3.14159 * (t - 0.68) / 0.32), 0.0), 0.6);
+    return w + head * w * 1.7 * (0.35 + 0.65 * abs(sin(t * 110.0)));   // slender, notched spikelets
+  }
+  float leaf = w * pow(max(sin(3.14159 * min(t * 1.08, 1.0)), 0.0), 0.7) * (0.25 + 0.75 * smoothstep(0.0, 0.22, t));
+  if (kind > 2.5) leaf *= 0.62 + 0.38 * abs(sin(t * 21.0));   // dandelion: toothed lobes
+  return leaf;
+}
+
+void bladeCompute(out vec3 pos, out vec3 nrm) {
+  float side = uv.x - 0.5;
+  float L = aShape.x;
+  float kind = aLook.w;
+  // Flowers: the first half of the strip is the stem; the second half becomes the head, built at the tip below.
+  float t = kind > 3.5 ? min(uv.y * 2.0, 1.0) : uv.y;
+
+  // Keep the length: the more it leans, the lower its tip sits.
+  vec2 H = aTip;
+  float hl = length(H);
+  float maxH = 0.96 * L;
+  if (hl > maxH) { H *= maxH / hl; hl = maxH; }
+  float vy = sqrt(max(L * L - hl * hl, 0.0));
+
+  vec3 p0 = aRoot;
+  vec3 p1 = aRoot + vec3(H.x * 0.22, max(vy, L * 0.32) * 0.92, H.y * 0.22);
+  if (kind > 1.5 && kind < 3.5) p1 = aRoot + vec3(H.x * 0.45, vy * 0.9 + L * 0.06, H.y * 0.45);   // rosette leaves arch low
+  vec3 p2 = aRoot + vec3(H.x, vy * 0.94, H.y);
+  float s = 1.0 - t;
+  vec3 B = s * s * p0 + 2.0 * s * t * p1 + t * t * p2;
+  vec3 T = normalize(2.0 * s * (p1 - p0) + 2.0 * t * (p2 - p1) + 1e-5);
+
+  vec3 wd = vec3(cos(aShape.z), 0.0, sin(aShape.z));
+  wd = normalize(wd - T * dot(wd, T) + 1e-5);
+  if (kind > 3.5) wd = normalize(cross(T, normalize(cameraPosition - B)) + 1e-5);   // flower heads face the viewer: globes read round
+  vec3 bn = cross(T, wd);
+  float tw = aShape.w * t;
+  vec3 W = wd * cos(tw) + bn * sin(tw);
+  vec3 Nf = normalize(cross(W, T));
+
+  pos = B + W * side * partWidth(t, kind);
+  pos.y = max(pos.y, aRoot.y + 0.002);
+  nrm = normalize(Nf + W * side * (kind > 1.5 && kind < 3.5 ? 0.6 : 1.6));   // folded midrib (flatter on broad leaves)
+  // Flower head: built at the stem tip facing the viewer, so its shape never stretches with the stem's curve.
+  if (kind > 3.5 && uv.y >= 0.5) {
+    float s = (uv.y - 0.5) * 2.0, r = aLook.y;
+    vec3 view = normalize(cameraPosition - p2);
+    vec3 up = normalize(normalize(p2 - p1) + vec3(0.0, 1.6, 0.0));   // heads turn upward, even on leaning stems
+    vec3 V = normalize(up - view * dot(up, view) + 1e-5);
+    vec3 U = normalize(cross(V, view));
+    if (kind > 4.5 && kind < 5.5) {                   // spike: cone of florets rising from the tip
+      pos = p2 + V * (s * r * 7.0) + U * side * 2.0 * r * (1.0 - 0.75 * s) * (0.6 + 0.4 * abs(sin(s * 31.0)));
+    } else {                                          // globe / dot: round disc just above the tip
+      float y = 2.0 * s - 1.0;
+      pos = p2 + V * (r + y * r) + U * side * 2.0 * sqrt(max(0.0, 1.0 - y * y)) * r * (0.9 + 0.1 * abs(sin(s * 40.0)));
+    }
+    nrm = normalize(view + U * side * 1.6 + V * (2.0 * s - 1.0) * 0.8);   // rounded shading
+  }
+
+  #ifdef BLADE_VARYINGS
+  vHead = kind > 3.5 ? 0.5 : 2.0;
+  vT = kind > 3.5 ? uv.y : t; vSide = side; vLook = aLook; vWorld = pos; vMid = aMid; vTipCol = aTipCol;
+  #endif
+}
+`;
+
+const uniforms = {
+  uTime: { value: 0 },
+  uDry: { value: new THREE.Color('#9a8a4a') },
+  uTrans: { value: new THREE.Color('#c8f070') },
+  uTransK: { value: 1 },
+  uSunDirW: { value: new THREE.Vector3(0, 1, 0) },
+  uCanopy: { value: 0.85 },
+  uCanopyDrift: { value: new THREE.Vector2() },
+  uDew: { value: 0 },
+  uWind: { value: new THREE.Vector3() },
+  uLoop: { value: new THREE.Vector2(0, 60) },
+};
+
+const bladeMaterial = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.5, metalness: 0 });
+bladeMaterial.defines = { BLADE_VARYINGS: '' };
+bladeMaterial.onBeforeCompile = (shader) => {
+  Object.assign(shader.uniforms, uniforms);
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>\n${BLADE_VERTEX}`)
+    .replace('#include <beginnormal_vertex>', 'vec3 bP0, bN0; bladeCompute(bP0, bN0); vec3 objectNormal = bN0;')
+    .replace('#include <begin_vertex>', 'vec3 transformed = bP0;');
+
+  const directExtras = /* glsl */ `
+    directLight.color *= canopyLight(vWorld);
+    // Thin leaves transmit light: glow when backlit, softer wrap from behind.
+    float backlit = pow(saturate(dot(-geometryViewDir, directLight.direction)), 5.0);
+    float through = saturate(dot(-geometryNormal, directLight.direction));
+    reflectedLight.directDiffuse += directLight.color * uTrans * uTransK * bladeAO * thinness *
+      (0.35 * through + 1.4 * backlit) * mix(0.25, 1.0, vT) * (1.0 - 0.6 * vLook.y);
+    // Morning dew: tiny beads along the blades glint toward the camera.
+    float glint = pow(saturate(dot(reflect(-directLight.direction, geometryNormal), geometryViewDir)), 120.0);
+    float bead = step(0.86, fract(sin(dot(vec2(floor(vT * 16.0), vLook.x * 517.0), vec2(12.9898, 78.233))) * 43758.5453));
+    reflectedLight.directSpecular += directLight.color * glint * bead * uDew * 9.0 * bladeAO;
+    RE_Direct( directLight,`;
+
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>
+      varying float vT; varying float vSide; varying vec4 vLook; varying vec3 vWorld; varying vec3 vMid; varying vec3 vTipCol; varying float vHead;
+      uniform vec3 uDry, uTrans, uSunDirW;
+      uniform float uCanopy, uTime, uTransK, uDew; uniform vec2 uCanopyDrift;
+      float bladeAO, thinness;
+      ${NOISE_GLSL}
+      // Off-frame trees on the left: dappled shadow projected along the sun direction.
+      float canopyLight(vec3 wp) {
+        vec2 g = wp.xz - uSunDirW.xz * (wp.y / max(uSunDirW.y, 0.05)) + uCanopyDrift;
+        float n = snoise(g * 0.9 + vec2(3.1, 7.7)) * 0.6 + snoise(g * 2.1 + 11.0) * 0.4;
+        n += snoise(g * 7.0) * 0.12;
+        n -= smoothstep(-0.9, -2.2, g.y) * 0.45;
+        return mix(1.0, smoothstep(-0.2, 0.12, n), uCanopy);
+      }`)
+    .replace('#include <color_fragment>', `
+      float kind = vLook.w;
+      vec3 base = vMid * vec3(0.36, 0.42, 0.3);
+      vec3 albedo = mix(base, vMid, smoothstep(0.0, 0.45, vT));
+      albedo = mix(albedo, vTipCol, smoothstep(0.45, 1.0, vT) * (0.5 + 0.5 * vLook.x));
+      albedo *= 0.8 + 0.4 * vLook.x;
+      albedo = mix(albedo, uDry, vLook.y * smoothstep(0.1, 0.9, vT + 0.3 * vLook.y));
+      bladeAO = mix(0.1, 1.0, pow(smoothstep(0.0, 0.85, vT), 1.3)) * vLook.z;
+      thinness = 1.0;
+      if (kind > 0.5 && kind < 1.5) {                 // stalk: green stem → tan / purple seed head
+        albedo = mix(vMid * mix(0.5, 1.0, vT), vTipCol, smoothstep(0.66, 0.72, vT));
+        bladeAO = mix(0.25, 1.0, smoothstep(0.0, 0.5, vT));
+        thinness = mix(1.0, 0.3, smoothstep(0.66, 0.72, vT));
+      } else if (kind > 3.5) {                        // wildflower: green stem, coloured head
+        float headMask = smoothstep(vHead - 0.02, vHead + 0.01, vT);
+        float floret = fract(sin(dot(floor(vec2(vSide * 10.0, vT * 60.0)), vec2(12.9898, 78.233))) * 43758.5453);
+        albedo = mix(vMid * mix(0.55, 1.0, vT), vTipCol * (0.85 + 0.3 * vLook.x), headMask);
+        bladeAO = mix(0.3, 1.0, smoothstep(0.0, 0.45, vT));
+        albedo = mix(albedo, albedo * (0.75 + 0.5 * floret) * (0.8 + 0.3 * (1.0 - 2.0 * abs(vSide))), headMask);   // florets + rounded shading
+        thinness = mix(1.0, 0.8, headMask);
+      } else if (kind > 1.5) {                        // broadleaf: glossy, pale midrib, sits low in the sward
+        albedo = mix(vMid, vTipCol, (1.0 - smoothstep(0.0, 0.07, abs(vSide))) * 0.8);
+        bladeAO = mix(0.35, 0.75, vT) * vLook.z;
+        thinness = 0.45;
+      }
+      diffuseColor.rgb = albedo * bladeAO;`)
+    .replace('#include <roughnessmap_fragment>', `
+      float roughnessFactor = kind > 3.5 ? 0.62 : kind > 1.5 ? 0.34 : (kind > 0.5 && vT > 0.68 ? 0.75 : mix(0.6, 0.26, vT));
+      roughnessFactor = max(0.12, roughnessFactor - 0.18 * uDew);`)
+    .replace('#include <lights_fragment_begin>',
+      THREE.ShaderChunk.lights_fragment_begin.replaceAll('RE_Direct( directLight,', directExtras));
+};
+
+const depthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: THREE.DoubleSide });
+depthMaterial.onBeforeCompile = (shader) => {
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>\n${BLADE_VERTEX}`)
+    .replace('#include <begin_vertex>', 'vec3 bP0, bN0; bladeCompute(bP0, bN0); vec3 transformed = bP0;');
+};
+
+const meadow = new THREE.Mesh(geometry, bladeMaterial);
+meadow.customDepthMaterial = depthMaterial;
+meadow.castShadow = meadow.receiveShadow = true;
+meadow.frustumCulled = false;
+scene.add(meadow);
+
+/* ========================================================================== */
+/*  Time of day                                                               */
+/* ========================================================================== */
+// Art-directed keyframes; the sun's position itself is computed below.
+//  hour, sun colour, sun intensity, moon intensity, sky, ground bounce, sky-light intensity, haze, exposure, translucency
+const TOD = [
+  [0.0,  '#ffffff', 0.0,  0.95, '#1e2c55', '#0a100a', 0.55, '#121e34', 2.9,  0.6],
+  [4.8,  '#ffffff', 0.0,  0.6,  '#2e3d6e', '#10160e', 0.6,  '#2e3a64', 2.6,  0.6],
+  [5.8,  '#ff9a60', 0.4,  0.1,  '#9a9cc8', '#2a3018', 0.8,  '#c4a6a4', 2.2,  1.2],
+  [6.6,  '#ffb67a', 2.2,  0.0,  '#b8c4e0', '#34461a', 1.0,  '#d8ccc0', 1.75, 1.5],
+  [8.0,  '#ffe6c0', 3.8,  0.0,  '#b4cdee', '#3d5414', 1.05, '#c8d4cc', 1.35, 1.2],
+  [11.0, '#fff6e6', 4.6,  0.0,  '#bcd6f4', '#40581a', 1.1,  '#bccab4', 1.1,  0.9],
+  [14.0, '#fffaf0', 4.8,  0.0,  '#c2daf6', '#40581a', 1.15, '#bdcab2', 1.08, 0.9],
+  [16.5, '#ffefcc', 4.3,  0.0,  '#bed2ec', '#3d5414', 1.0,  '#cdcca8', 1.25, 1.1],
+  [17.8, '#ffe0aa', 4.1,  0.0,  '#cfd0d2', '#2f4a0e', 0.95, '#e0cc98', 1.42, 1.35],
+  [19.0, '#ff9450', 2.3,  0.0,  '#b298ac', '#302e12', 0.9,  '#d89a74', 1.95, 1.7],
+  [19.8, '#ff6a40', 0.35, 0.1,  '#64608e', '#161a12', 0.7,  '#6e5e7c', 2.4,  0.9],
+  [20.6, '#ffffff', 0.0,  0.6,  '#2a3866', '#0c120c', 0.6,  '#243052', 2.6,  0.6],
+  [24.0, '#ffffff', 0.0,  0.95, '#1e2c55', '#0a100a', 0.55, '#121e34', 2.9,  0.6],
+].map(([h, sc, si, mi, sky, gr, hi, fog, ex, tr]) => ({ h, sc: linear(sc), si, mi, sky: linear(sky), gr: linear(gr), hi, fog: linear(fog), ex, tr }));
+
+const MOON_COLOR = linear('#9db2ff');
+const MOON_DIR = new THREE.Vector3(0.45, 0.62, -0.65).normalize();
+const SUNRISE = 5.9, DAYLEN = 14;
+
+function sunDirection(hour) {
+  const f = clamp((hour - SUNRISE) / DAYLEN, 0, 1);
+  const el = THREE.MathUtils.degToRad(Math.max(2, Math.sin(Math.PI * f) * 55));
+  const az = THREE.MathUtils.degToRad(105 - 210 * f);     // rises on the right, sets on the left (behind the trees)
+  return new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
+}
+
+const _c = new THREE.Color();
+function applyTimeOfDay(hour) {
+  hour = ((hour % 24) + 24) % 24;
+  let i = 0;
+  while (i < TOD.length - 2 && TOD[i + 1].h <= hour) i++;
+  const a = TOD[i], b = TOD[i + 1], k = smoothstep(0, 1, (hour - a.h) / (b.h - a.h));
+  const lerp = (x, y) => x + (y - x) * k;
+
+  const si = lerp(a.si, b.si), mi = lerp(a.mi, b.mi);
+  const sunDir = sunDirection(hour);
+  // One light carries sun and moon; direction and colour are blended by their strengths.
+  const total = si + mi + 1e-4;
+  const dir = sunDir.clone().multiplyScalar(si).addScaledVector(MOON_DIR, mi).normalize();
+  sun.color.copy(_c.copy(a.sc).lerp(b.sc, k)).multiplyScalar(si / total).add(MOON_COLOR.clone().multiplyScalar(mi / total));
+  sun.intensity = si + mi;
+  sun.position.copy(fieldCenter).addScaledVector(dir, 6);
+  uniforms.uSunDirW.value.copy(dir);
+  // Grazing light needs more bias, or thin blades self-shadow in stripes (acne).
+  sun.shadow.bias = -0.0004 - 0.0025 * (1 - smoothstep(0.1, 0.5, dir.y));
+
+  hemi.color.copy(a.sky).lerp(b.sky, k);
+  hemi.groundColor.copy(a.gr).lerp(b.gr, k);
+  hemi.intensity = lerp(a.hi, b.hi);
+  scene.fog.color.copy(a.fog).lerp(b.fog, k);
+  scene.background.copy(scene.fog.color);
+  renderer.toneMappingExposure = lerp(a.ex, b.ex);
+  uniforms.uTransK.value = lerp(a.tr, b.tr);
+  // Trees stand to the left: they only throw shadows when the light comes from that side.
+  uniforms.uCanopy.value = 0;                     // open hillside: no trees
+  uniforms.uDew.value = smoothstep(4.8, 6.2, hour) * (1 - smoothstep(8.0, 9.8, hour));
+  return { hour, sunDir };
+}
+
+const TOD_NAMES = [[4.8, 'Night'], [5.8, 'Blue hour'], [7.0, 'Sunrise'], [11, 'Morning'], [15, 'Midday'], [17.2, 'Afternoon'],
+  [19.0, 'Golden hour'], [19.8, 'Sunset'], [20.6, 'Dusk'], [24, 'Night']];
+const todName = (h) => TOD_NAMES.find(([end]) => h < end)?.[1] ?? 'Night';
+const fmtTime = (h) => `${String(Math.floor(h) % 24).padStart(2, '0')}:${String(Math.floor((h % 1) * 60)).padStart(2, '0')}`;
+
+/* ========================================================================== */
+/*  Simulation clock                                                          */
+/* ========================================================================== */
+let simTime = 0;
+let lastWindTick = NaN;
+function advanceTo(target) {
+  const h = 1 / PHYS.substepHz;
+  while (simTime + h <= target + 1e-9) {
+    // Wind varies slowly; refreshing its grid at 30 Hz is plenty and keeps the sim cheap.
+    const windTick = Math.floor(simTime * 30 + 1e-6);
+    if (windTick !== lastWindTick) { updateWindGrid(simTime); lastWindTick = windTick; }
+    stepPhysics(simTime, h);
+    simTime += h;
+  }
+}
+const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
+async function advanceAsync(target, onProgress) {
+  const start = simTime;
+  while (simTime < target - 1e-6) {
+    advanceTo(Math.min(target, simTime + 0.25));
+    onProgress?.((simTime - start) / (target - start));
+    await nextFrame();
+  }
+}
+function syncGPU() {
+  for (let i = 0; i < NI; i++) {
+    const p = instToPlant[i];
+    aTip[i * 2] = S.restX[p] + S.dx[p];
+    aTip[i * 2 + 1] = S.restZ[p] + S.dz[p];
+  }
+  tipAttr.needsUpdate = true;
+  uniforms.uTime.value = simTime;
+  uniforms.uWind.value.set(wind.dir.x, wind.dir.y, wind.speed * (0.5 + 0.5 * wind.gust));
+  uniforms.uLoop.value.set(((simTime % LOOP) + LOOP) % LOOP, LOOP);
+  const ph = (2 * Math.PI * simTime) / LOOP;            // trees sway gently, periodic with the loop
+  uniforms.uCanopyDrift.value.set(Math.sin(ph) * 0.025, Math.cos(ph * 2) * 0.012);
+}
+
+/* ========================================================================== */
+/*  State shared by UI, live loop and export                                  */
+/* ========================================================================== */
+const state = { live: !params.has('time') && !CAPTURE, hour: num('time', 17.8), exporting: false };
+const clockHour = () => { const d = new Date(); return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600; };
+
+function applyWindPreset(name) {
+  Object.assign(wind, WIND_PRESETS[name], { preset: name });
+}
+if (params.has('wind') && WIND_PRESETS[params.get('wind')]) applyWindPreset(params.get('wind'));
+if (params.has('dir')) { setWindDir(num('dir', 15)); computeShelter(); }
+
+/* ========================================================================== */
+/*  Sound: real field recordings, mixed live by the simulation                */
+/* ========================================================================== */
+// Rustle comes from blades brushing past each other, so the grass layers follow how fast the blade
+// tips are actually moving — measured separately on the left and right of the screen.
+// Nearby grass dominates what you hear (loudness falls with distance), so blades are weighted by 1/distance.
+const AUDIO_PROBE = (() => {
+  const side = { left: [[], []], right: [[], []] }, v = new THREE.Vector3();
+  for (let i = 0; i < N; i += 11) {
+    if (plants[i].kind >= KIND.plantain) continue;
+    v.set(S.rx[i], 0.1, S.rz[i]).project(camera);
+    if (Math.abs(v.x) > 1.1 || Math.abs(v.y) > 1.1) continue;
+    const d = Math.hypot(S.rx[i] - camera.position.x, CAM.height, S.rz[i] - camera.position.z);
+    const s = side[v.x < 0 ? 'left' : 'right'];
+    s[0].push(i); s[1].push(1 / Math.max(d, 0.4) ** 2);
+  }
+  const pack = ([idx, w]) => ({ idx: Int32Array.from(idx), w: Float32Array.from(w), sum: w.reduce((a, b) => a + b, 0) || 1 });
+  return { left: pack(side.left), right: pack(side.right) };
+})();
+
+function soundState() {
+  const sideSpeed = ({ idx, w, sum }) => { let s = 0; for (let k = 0; k < idx.length; k++) s += w[k] * Math.hypot(S.vx[idx[k]], S.vz[idx[k]]); return s / sum; };
+  return { wind: clamp(wind.speed / 6.5, 0, 1), left: sideSpeed(AUDIO_PROBE.left), right: sideSpeed(AUDIO_PROBE.right), hour: state.hour };
+}
+
+// How much of each ambience is present at a given hour (0..1).
+function ambienceMix(h) {
+  const band = (a, b, c, d) => smoothstep(a, b, h) * (1 - smoothstep(c, d, h));
+  return {
+    dawn: band(4.6, 5.6, 8.0, 9.5),
+    day: band(7.5, 9.0, 17.5, 19.0),
+    insects: band(9.5, 11.5, 18.0, 19.8),
+    evening: band(17.0, 18.0, 20.0, 21.0),
+    night: Math.max(1 - smoothstep(4.6, 5.8, h), smoothstep(19.8, 21.0, h)),
+  };
+}
+
+// Field recordings (see audio/CREDITS.md). Each is trimmed, de-rumbled and normalised to −23 LUFS.
+const SOUND_FILES = ['grass_gentle', 'grass_reeds', 'grass_strong', 'meadow_day', 'dawn_chorus', 'skylark', 'blackbird_evening', 'crickets_night'];
+const AMBIENCE_URL = params.get('ambience');            // optional extra loop of your own: ?ambience=file.mp3
+const soundBytes = new Map();                           // fetched once, decoded per audio context
+async function loadSoundBank(ctx) {
+  const urls = SOUND_FILES.map((n) => [n, `audio/${n}.mp3`]);
+  if (AMBIENCE_URL) urls.push(['custom', AMBIENCE_URL]);
+  const bank = {};
+  await Promise.all(urls.map(async ([name, url]) => {
+    try {
+      if (!soundBytes.has(name)) soundBytes.set(name, await fetch(url).then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); }));
+      bank[name] = await ctx.decodeAudioData(soundBytes.get(name).slice(0));
+    } catch (e) { console.warn(`sound "${name}" unavailable`, e); }
+  }));
+  return bank;
+}
+
+// Equal-power fade curves for seamless joins between recording windows.
+const FADE_IN = Float32Array.from({ length: 64 }, (_, i) => Math.sin((i / 63) * Math.PI / 2));
+const FADE_OUT = Float32Array.from(FADE_IN).reverse();
+
+/**
+ * Builds the soundscape on any BaseAudioContext (live AudioContext or OfflineAudioContext).
+ *   update(state, time, tc) — layer volumes follow the simulation (tc = smoothing in s; 0 = jump)
+ *   fill(until)             — keeps every recording playing up to `until` (random windows, cross-faded)
+ */
+function createSoundscape(ctx, seed, bank) {
+  const rnd = mulberry32(seed);
+  const master = ctx.createGain();
+  master.gain.value = 0;
+  const comp = ctx.createDynamicsCompressor();
+  Object.entries({ threshold: -14, knee: 10, ratio: 2.5, attack: 0.02, release: 0.4 }).forEach(([k, v]) => { comp[k].value = v; });
+  master.connect(comp).connect(ctx.destination);
+
+  // A recording played as an endless chain of random windows with 3 s equal-power cross-fades:
+  // it never audibly repeats and never clicks.
+  const players = [];
+  function track(buffer, pan) {
+    const gain = ctx.createGain(); gain.gain.value = 0;
+    const p = ctx.createStereoPanner(); p.pan.value = pan;
+    gain.connect(p).connect(master);
+    if (buffer) players.push({ buffer, out: gain, next: 0 });
+    return gain;
+  }
+  function fillPlayer(pl, until) {
+    const fade = 3, seg = Math.min(18, pl.buffer.duration - 0.5);
+    while (pl.next < until) {
+      const src = ctx.createBufferSource(); src.buffer = pl.buffer;
+      const g = ctx.createGain(); g.gain.value = 0;
+      src.connect(g).connect(pl.out);
+      const start = Math.max(pl.next, ctx.currentTime), offset = 0.2 + rnd() * (pl.buffer.duration - seg - 0.4);
+      g.gain.setValueCurveAtTime(FADE_IN, start, fade);
+      g.gain.setValueCurveAtTime(FADE_OUT, start + seg - fade, fade);
+      src.start(start, offset, seg);
+      pl.next = start + seg - fade;
+    }
+  }
+
+  // Grass layers come in left/right pairs so gusts sweep across the stereo field with the picture.
+  const pair = (name) => [track(bank[name], -0.55), track(bank[name], 0.55)];
+  const gentle = pair('grass_gentle'), reeds = pair('grass_reeds'), strong = pair('grass_strong');
+  const meadow = track(bank.meadow_day, 0), dawn = track(bank.dawn_chorus, 0), lark = track(bank.skylark, 0.2);
+  const blackbird = track(bank.blackbird_evening, -0.25), crickets = track(bank.crickets_night, 0);
+  const custom = track(bank.custom, 0);
+
+  const set = (param, v, t, tc) => (tc > 0 ? param.setTargetAtTime(v, t, tc) : param.setValueAtTime(v, t));
+
+  function update(st, t, tc = 0.3) {
+    const mix = ambienceMix(st.hour), w = st.wind;
+    // Blade-tip speed → 0..1 per side (≈0.03 calm, 0.2 breeze, 0.45 gusty, 0.9 storm).
+    const sides = [clamp(st.left / 0.5, 0, 1), clamp(st.right / 0.5, 0, 1)];
+    sides.forEach((m, k) => {
+      set(gentle[k].gain, 0.22 + 0.55 * smoothstep(0.0, 0.3, m) * (1 - 0.4 * smoothstep(0.55, 1, m)), t, tc);
+      set(reeds[k].gain, 0.75 * smoothstep(0.12, 0.55, m), t, tc);
+      set(strong[k].gain, 1.3 * Math.pow(smoothstep(0.25, 0.9, m), 1.4), t, tc);   // gusts surge in
+    });
+    // Wildlife sings less as the wind rises; in calm air it carries the scene.
+    const calm = 1 - 0.65 * w;
+    set(meadow.gain, 0.55 * Math.max(mix.insects, 0.6 * mix.day) * calm, t, tc);
+    set(dawn.gain, 0.75 * mix.dawn * calm, t, tc);
+    set(lark.gain, 0.45 * (mix.day + 0.4 * mix.dawn) * calm, t, tc);
+    set(blackbird.gain, 0.65 * mix.evening * calm, t, tc);
+    set(crickets.gain, 0.7 * mix.night * (1 - 0.4 * w), t, tc);
+    set(custom.gain, 0.5 * calm, t, tc);
+  }
+
+  return {
+    update,
+    fill: (until) => players.forEach((pl) => fillPlayer(pl, until)),
+    resetClock: (t) => players.forEach((pl) => { pl.next = t; }),
+    setMaster: (v, t, tc = 0.15) => set(master.gain, v, t, tc),
+  };
+}
+
+// ---- Live playback ---------------------------------------------------------
+const MASTER_LEVEL = 1.0;
+const sound = { ctx: null, scape: null, on: false, starting: null };
+try { sound.on = localStorage.getItem('meadow-sound') === 'on'; } catch { /* storage blocked — default off */ }
+
+async function startSound() {
+  if (!sound.ctx) {
+    sound.ctx = new AudioContext({ latencyHint: 'playback' });
+    sound.starting ??= (async () => {
+      setStatus('Loading sounds…');
+      const bank = await loadSoundBank(sound.ctx);
+      sound.scape = createSoundscape(sound.ctx, SEED, bank);
+      sound.scape.update(soundState(), sound.ctx.currentTime, 0);
+      setStatus(Object.keys(bank).length ? 'Sound on' : 'Sound files not found (audio/ folder)', 1500);
+    })();
+  }
+  await sound.ctx.resume();
+  await sound.starting;
+  sound.scape.resetClock(sound.ctx.currentTime);   // fresh fade-in after a pause instead of a backlog
+  sound.scape.setMaster(MASTER_LEVEL, sound.ctx.currentTime, 0.6);
+}
+function stopSound() {
+  if (!sound.scape) return;
+  sound.scape.setMaster(0, sound.ctx.currentTime, 0.15);
+  setTimeout(() => { if (!sound.on || state.exporting) sound.ctx.suspend(); }, 700);
+}
+function tickSound() {
+  if (!sound.on || !sound.scape || sound.ctx.state !== 'running' || state.exporting) return;
+  const now = sound.ctx.currentTime;
+  sound.scape.update(soundState(), now, 0.2);
+  sound.scape.fill(now + 2);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!sound.ctx) return;
+  if (document.hidden) sound.ctx.suspend();
+  else if (sound.on && !state.exporting) startSound();
+});
+
+// ---- Offline render for export: driven by the exact per-frame states of the video ----
+async function renderLoopAudio(track, fps, seconds) {
+  const sr = 48000, tail = 3;
+  const off = new OfflineAudioContext(2, Math.round(sr * (seconds + tail)), sr);
+  const scape = createSoundscape(off, SEED + 1, await loadSoundBank(off));
+  scape.setMaster(MASTER_LEVEL, 0, 0);
+  scape.fill(seconds + tail);
+  const total = Math.ceil((seconds + tail) * fps);
+  for (let i = 0; i < total; i++) scape.update(track[i % track.length], i / fps, i === 0 ? 0 : 0.2);   // the sim is periodic
+  const buf = await off.startRendering();
+  // Seamless: cross-fade the rendered tail (T … T+3 s) into the head so the last sample flows into the first.
+  // Equal-power, because head and tail are different stretches of the recordings (uncorrelated).
+  const n = Math.round(sr * seconds), x = Math.round(sr * tail);
+  const channels = [0, 1].map((ch) => {
+    const d = buf.getChannelData(ch), o = d.slice(0, n);
+    for (let i = 0; i < x; i++) { const a = i / x; o[i] = d[i] * Math.sin(a * Math.PI / 2) + d[n + i] * Math.cos(a * Math.PI / 2); }
+    return o;
+  });
+  return { sampleRate: sr, channels };
+}
+
+async function pickAudioCodec() {
+  if (!('AudioEncoder' in window)) return null;
+  for (const c of [{ codec: 'mp4a.40.2', mux: 'aac' }, { codec: 'opus', mux: 'opus' }]) {
+    const cfg = { codec: c.codec, sampleRate: 48000, numberOfChannels: 2, bitrate: 160000 };
+    if ((await AudioEncoder.isConfigSupported(cfg).catch(() => ({}))).supported) return { ...c, cfg };
+  }
+  return null;
+}
+
+async function encodeAudio(audio, codec, muxer) {
+  let error = null;
+  const enc = new AudioEncoder({ output: (chunk, meta) => muxer.addAudioChunk(chunk, meta), error: (e) => { error = e; } });
+  enc.configure(codec.cfg);
+  const [l, r] = audio.channels, step = 4800;
+  for (let o = 0; o < l.length; o += step) {
+    const len = Math.min(step, l.length - o), data = new Float32Array(len * 2);
+    data.set(l.subarray(o, o + len), 0); data.set(r.subarray(o, o + len), len);
+    const ad = new AudioData({ format: 'f32-planar', sampleRate: audio.sampleRate, numberOfFrames: len, numberOfChannels: 2, timestamp: Math.round((o * 1e6) / audio.sampleRate), data });
+    enc.encode(ad);
+    ad.close();
+  }
+  await enc.flush();
+  if (error) throw error;
+}
+
+/* ========================================================================== */
+/*  Export: deterministic offline rendering → MP4 (WebCodecs) or GIF          */
+/* ========================================================================== */
+async function encodeLoop({ format, seconds, width, onProgress }) {
+  const fps = format === 'gif' ? 15 : 30;
+  const frames = Math.round(seconds * fps);
+  const W = Math.round((width ?? (format === 'gif' ? 360 : 1080)) / 2) * 2;
+  const H = Math.round(W / camera.aspect / 2) * 2;
+
+  // Exactly periodic wind + settle one full period → frame N flows into frame 0.
+  setLoop(seconds);
+  simTime = -seconds; lastWindTick = NaN;
+  await advanceAsync(0, (p) => onProgress(p * 0.2, 'Settling wind…'));
+
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, H, false);
+
+  let finish, addFrame;
+  const soundTrack = [];                               // per-frame sound state → audio matches the picture exactly
+  if (format === 'mp4') {
+    if (!('VideoEncoder' in window)) throw new Error('MP4 export needs a browser with WebCodecs (Chrome, Edge, Safari 17+).');
+    const { Muxer, ArrayBufferTarget } = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.mjs');
+    const bitrate = Math.round(W * H * fps * 0.18);
+    const candidates = [
+      { codec: 'avc1.640033', mux: 'avc' }, { codec: 'avc1.4d0033', mux: 'avc' }, { codec: 'avc1.42003e', mux: 'avc' },
+      { codec: 'vp09.00.51.08', mux: 'vp9' },
+    ];
+    let chosen = null;
+    for (const c of candidates) {
+      const cfg = { codec: c.codec, width: W, height: H, bitrate, framerate: fps };
+      if ((await VideoEncoder.isConfigSupported(cfg).catch(() => ({}))).supported) { chosen = { ...c, cfg }; break; }
+    }
+    if (!chosen) throw new Error('This browser cannot encode MP4 video.');
+    const audioCodec = await pickAudioCodec();          // AAC where available, else Opus; silent if neither
+    const target = new ArrayBufferTarget();
+    const muxer = new Muxer({
+      target, fastStart: 'in-memory',
+      video: { codec: chosen.mux, width: W, height: H, frameRate: fps },
+      audio: audioCodec ? { codec: audioCodec.mux, numberOfChannels: 2, sampleRate: 48000 } : undefined,
+    });
+    let encodeError = null;
+    const encoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (e) => { encodeError = e; } });
+    encoder.configure(chosen.cfg);
+    addFrame = async (i) => {
+      if (encodeError) throw encodeError;
+      const vf = new VideoFrame(renderer.domElement, { timestamp: Math.round((i * 1e6) / fps), duration: Math.round(1e6 / fps) });
+      encoder.encode(vf, { keyFrame: i % (fps * 2) === 0 });
+      vf.close();
+      while (encoder.encodeQueueSize > 4) await new Promise((r) => setTimeout(r, 2));
+    };
+    finish = async () => {
+      await encoder.flush();
+      if (audioCodec) {
+        onProgress(0.99, 'Mixing sound…');
+        await encodeAudio(await renderLoopAudio(soundTrack, fps, seconds), audioCodec, muxer);
+      }
+      muxer.finalize();
+      return new Blob([target.buffer], { type: 'video/mp4' });
+    };
+  } else {
+    const { GIFEncoder, quantize, applyPalette } = await import('https://cdn.jsdelivr.net/npm/gifenc@1.0.3/dist/gifenc.esm.js');
+    const gif = GIFEncoder();
+    const c2 = Object.assign(document.createElement('canvas'), { width: W, height: H });
+    const ctx = c2.getContext('2d', { willReadFrequently: true });
+    let palette = null;
+    addFrame = async (i) => {
+      ctx.drawImage(renderer.domElement, 0, 0, W, H);
+      const { data } = ctx.getImageData(0, 0, W, H);
+      palette ??= quantize(data, 256);                 // one palette for the whole loop → no colour flicker
+      gif.writeFrame(applyPalette(data, palette), W, H, { palette, delay: Math.round(1000 / fps), repeat: 0 });
+    };
+    finish = async () => { gif.finish(); return new Blob([gif.bytes()], { type: 'image/gif' }); };
+  }
+
+  for (let i = 0; i < frames; i++) {
+    advanceTo(i / fps);
+    syncGPU();
+    renderer.render(scene, camera);
+    soundTrack.push(soundState());
+    await addFrame(i);                                 // grab synchronously, before the buffer is presented
+    onProgress(0.2 + 0.78 * ((i + 1) / frames), `Rendering ${i + 1}/${frames}`);
+    if (i % 2) await nextFrame();
+  }
+  onProgress(0.99, 'Encoding…');
+  return finish();
+}
+
+async function runExport(format) {
+  if (state.exporting) return;
+  state.exporting = true;
+  if (sound.ctx) stopSound();
+  ui.exportStart();
+  try {
+    const blob = await encodeLoop({ format, seconds: ui.loopSeconds(), onProgress: ui.exportProgress });
+    ui.exportDone(blob, `meadow-${fmtTime(state.hour).replace(':', '')}-${wind.preset}.${format}`);
+  } catch (err) {
+    console.error(err);
+    ui.exportFailed(err.message);
+  } finally {
+    endExport();
+  }
+}
+
+function endExport() {
+  setLoop(LIVE_LOOP);
+  lastWindTick = NaN;
+  renderer.setPixelRatio(DPR);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  state.exporting = false;
+  if (sound.on && sound.ctx) startSound();
+}
+
+/* ========================================================================== */
+/*  UI                                                                        */
+/* ========================================================================== */
+const $ = (id) => document.getElementById(id);
+const ui = (() => {
+  const dock = $('dock'), bar = $('dockBar');
+  if (navigator.userAgentData?.brands?.some((b) => /Chromium/.test(b.brand))) document.body.classList.add('refract');
+
+  bar.addEventListener('click', () => {
+    const open = dock.dataset.open !== 'true';
+    dock.dataset.open = String(open);
+    bar.setAttribute('aria-expanded', String(open));
+    bar.setAttribute('aria-label', open ? 'Hide meadow controls' : 'Show meadow controls');
+    if (open) requestAnimationFrame(() => document.querySelectorAll('.seg').forEach(placePill));
+  });
+
+  // Segmented controls with a sliding pill.
+  function placePill(seg) {
+    const on = seg.querySelector('[aria-checked="true"]'), pill = seg.querySelector('.pill');
+    if (!on || !on.offsetWidth) return;
+    pill.style.width = `${on.offsetWidth}px`;
+    pill.style.transform = `translateX(${on.offsetLeft - 3}px)`;
+  }
+  function segment(seg, value, onChange) {
+    const buttons = [...seg.querySelectorAll('button')];
+    const select = (v, fire) => {
+      buttons.forEach((b) => { b.setAttribute('aria-checked', String(b.dataset.v === v)); b.tabIndex = b.dataset.v === v ? 0 : -1; });
+      placePill(seg);
+      if (fire) onChange(v);
+    };
+    buttons.forEach((b, i) => {
+      b.addEventListener('click', () => select(b.dataset.v, true));
+      b.addEventListener('keydown', (e) => {
+        const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (!d) return;
+        const nb = buttons[(i + d + buttons.length) % buttons.length];
+        nb.focus(); select(nb.dataset.v, true);
+      });
+    });
+    select(value, false);
+    return select;
+  }
+
+  // Sound: off until the user asks (and browsers need a tap before audio can start anyway).
+  const soundBtn = $('soundBtn');
+  const syncSound = () => {
+    soundBtn.setAttribute('aria-pressed', String(sound.on));
+    soundBtn.setAttribute('aria-label', sound.on ? 'Mute meadow sound' : 'Play meadow sound');
+  };
+  soundBtn.addEventListener('click', () => {
+    sound.on = !sound.on;
+    try { localStorage.setItem('meadow-sound', sound.on ? 'on' : 'off'); } catch { /* not persisted */ }
+    if (sound.on) startSound(); else stopSound();
+    syncSound();
+  });
+  // Remembered "on": start with the first touch anywhere.
+  if (sound.on) window.addEventListener('pointerdown', () => { if (sound.on) startSound(); }, { once: true });
+  syncSound();
+
+  // Time
+  const slider = $('timeSlider'), live = $('liveToggle');
+  slider.addEventListener('input', () => { state.live = false; state.hour = parseFloat(slider.value); syncTime(); });
+  live.addEventListener('click', () => { state.live = !state.live; syncTime(); });
+  function syncTime() {
+    live.setAttribute('aria-checked', String(state.live));
+    if (document.activeElement !== slider) slider.value = state.hour.toFixed(2);
+    $('barTime').textContent = fmtTime(state.hour);
+    $('barTod').textContent = todName(state.hour);
+    $('panelTod').textContent = todName(state.hour);
+    slider.setAttribute('aria-valuetext', `${fmtTime(state.hour)}, ${todName(state.hour)}`);
+    const night = state.hour < 5.8 || state.hour > 20.2;
+    slider.style.setProperty('--sun', night ? '#cdd8ff' : `#${sun.color.getHexString(THREE.SRGBColorSpace)}`);
+    slider.style.setProperty('--sun-glow', night ? 'rgba(180,200,255,.6)' : 'rgba(255,200,120,.7)');
+  }
+
+  // Wind
+  const fine = { strength: $('fStrength'), gust: $('fGust'), turb: $('fTurb') };
+  const syncFine = () => {
+    fine.strength.value = wind.speed; fine.gust.value = wind.gust; fine.turb.value = wind.turb;
+    fine.strength.nextElementSibling.textContent = `${wind.speed.toFixed(1)}`;
+    fine.gust.nextElementSibling.textContent = `${Math.round(wind.gust * 100)}%`;
+    fine.turb.nextElementSibling.textContent = `${Math.round(wind.turb * 100)}%`;
+    $('barWind').textContent = wind.preset === 'custom' ? `${wind.speed.toFixed(1)} m/s` : wind.preset[0].toUpperCase() + wind.preset.slice(1);
+  };
+  const selectWind = segment($('windSeg'), wind.preset, (v) => { applyWindPreset(v); syncFine(); });
+  for (const [key, input] of Object.entries(fine)) {
+    input.addEventListener('input', () => {
+      wind[key === 'strength' ? 'speed' : key] = parseFloat(input.value);
+      wind.preset = 'custom';
+      $('windSeg').querySelectorAll('button').forEach((b) => b.setAttribute('aria-checked', 'false'));
+      $('windSeg').querySelector('.pill').style.width = '0px';
+      syncFine();
+    });
+  }
+  $('fineToggle').addEventListener('click', (e) => {
+    const f = $('fine'), open = f.hidden;
+    f.hidden = !open;
+    e.currentTarget.setAttribute('aria-expanded', String(open));
+    e.currentTarget.textContent = open ? 'Done' : 'Fine-tune';
+  });
+  syncFine();
+
+  // Direction dial: the arrow points where the wind blows (screen space).
+  const dial = $('dial'), arrow = dial.querySelector('svg');
+  const syncDial = () => { arrow.style.transform = `rotate(${wind.dirDeg}deg)`; dial.setAttribute('aria-valuenow', String(Math.round(wind.dirDeg))); dial.setAttribute('aria-valuetext', `${Math.round(wind.dirDeg)} degrees`); };
+  let shelterTimer = 0;
+  const setDir = (deg) => {
+    setWindDir(deg); syncDial();
+    clearTimeout(shelterTimer); shelterTimer = setTimeout(computeShelter, 60);
+  };
+  const dragDial = (e) => {
+    const r = dial.getBoundingClientRect();
+    setDir(Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)) * 180 / Math.PI);
+  };
+  dial.addEventListener('pointerdown', (e) => { dial.setPointerCapture(e.pointerId); dragDial(e); });
+  dial.addEventListener('pointermove', (e) => { if (dial.hasPointerCapture(e.pointerId)) dragDial(e); });
+  dial.addEventListener('keydown', (e) => {
+    const d = { ArrowRight: 15, ArrowUp: 15, ArrowLeft: -15, ArrowDown: -15 }[e.key];
+    if (d) { e.preventDefault(); setDir(wind.dirDeg + d); }
+  });
+  syncDial();
+
+  // Sound credits (CC BY / BY-SA require them; full details in audio/CREDITS.md)
+  const SOUND_CREDITS = [
+    ['Wheat field in the wind, Luxembourg', 'Frank Schulte', 'Public Domain'],
+    ['Reeds hissing in the wind, Spremberg', 'Peter Cusack', 'Public Domain'],
+    ['Wind in the tall grass, Kotayk', 'Vincent Duseigne', 'CC BY 3.0'],
+    ['Meadow near Münsing', 'Fritz Schlüter', 'CC BY-SA 3.0'],
+    ['Dawn chorus, Radčice', 'yankrticka', 'Public Domain'],
+    ['Skylark song, Malton', 'david m', 'CC BY 3.0'],
+    ['Evening blackbird, Köln', 'hasenbrot', 'CC BY-SA 3.0'],
+    ['Crickets at night, Le Derboux', 'Jillis Molenaar', 'Public Domain'],
+  ];
+  const credits = $('credits');
+  credits.replaceChildren(...SOUND_CREDITS.map(([what, who, lic]) => Object.assign(document.createElement('li'), { textContent: `${what} — ${who} (${lic})` })),
+    Object.assign(document.createElement('li'), { textContent: 'Field recordings from radio aporee ::: maps via the Internet Archive; trimmed, filtered and normalised.' }));
+  $('creditsToggle').addEventListener('click', (e) => {
+    credits.hidden = !credits.hidden;
+    e.currentTarget.setAttribute('aria-expanded', String(!credits.hidden));
+  });
+
+  // Export
+  const exportSec = $('exportSec'), bar2 = $('progress'), saveRow = $('saveRow'), saveBtn = $('saveBtn');
+  let loopSec = '10';
+  segment($('lenSeg'), loopSec, (v) => { loopSec = v; });
+  $('mp4Btn').addEventListener('click', () => runExport('mp4'));
+  $('gifBtn').addEventListener('click', () => runExport('gif'));
+  if (!('VideoEncoder' in window)) { $('mp4Btn').disabled = true; $('mp4Btn').title = 'Needs WebCodecs (Chrome, Edge, Safari 17+)'; }
+  let saved = null;
+  saveBtn.addEventListener('click', async () => {
+    if (!saved) return;
+    // Hosted on claude.ai the page can't download by itself; the viewer confirms the save instead.
+    const downloads = await window.claude?.use?.('downloads');
+    if (downloads) {
+      try {
+        await downloads.save({ filename: saved.name, data: saved.blob });
+        $('exportNote').textContent = 'Saved';
+      } catch (e) {
+        $('exportNote').textContent = { declined: 'Save cancelled', too_large: 'Too large to save here', rate_limited: 'Try Save again in a moment' }[e?.code] ?? 'Saving isn’t available here';
+      }
+      return;
+    }
+    const file = new File([saved.blob], saved.name, { type: saved.blob.type });
+    if (/Android|iPhone|iPad/i.test(navigator.userAgent) && navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); return; } catch { /* fall back to a download */ }
+    }
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(saved.blob), download: saved.name });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  });
+
+  return {
+    syncTime,
+    loopSeconds: () => parseInt(loopSec, 10),
+    exportStart() { exportSec.classList.add('exporting'); saveRow.hidden = true; this.exportProgress(0, 'Preparing…'); },
+    exportProgress(p, text) {
+      bar2.querySelector('i').style.transform = `scaleX(${p})`;
+      $('progressText').textContent = text;
+      bar2.setAttribute('aria-valuenow', String(Math.round(p * 100)));
+    },
+    exportDone(blob, name) {
+      exportSec.classList.remove('exporting');
+      saved = { blob, name };
+      saveBtn.textContent = `Save ${name.split('.').pop().toUpperCase()} · ${(blob.size / 1e6).toFixed(1)} MB`;
+      saveRow.hidden = false;
+      $('exportNote').textContent = 'Ready';
+      if (!window.claude && !/Android|iPhone|iPad/i.test(navigator.userAgent)) saveBtn.click();   // local desktop: download straight away
+    },
+    exportFailed(msg) { exportSec.classList.remove('exporting'); $('exportNote').textContent = msg; },
+  };
+})();
+
+/* ========================================================================== */
+/*  Live loop / headless capture                                              */
+/* ========================================================================== */
+window.__stats = () => {
+  let d2 = 0, v2 = 0;
+  for (let i = 0; i < N; i++) { d2 += S.dx[i] ** 2 + S.dz[i] ** 2; v2 += S.vx[i] ** 2 + S.vz[i] ** 2; }
+  return { plants: N, instances: NI, rmsDisp: Math.sqrt(d2 / N), rmsSpeed: Math.sqrt(v2 / N) };
+};
+
+if (CAPTURE) { window.__debug = { S, plants, shelter, cellOf }; window.__soundState = () => soundState(); }
+
+window.__capture = {
+  ready: Promise.resolve(),
+  setup() {
+    renderer.setSize(FRAME.w, FRAME.h, false);
+    applyTimeOfDay(state.hour);
+    setLoop(num('loop', 10));
+    simTime = -LOOP;
+    advanceTo(0);
+    return { w: FRAME.w, h: FRAME.h, blades: N };
+  },
+  frame(t) {
+    advanceTo(t);
+    syncGPU();
+    renderer.render(scene, camera);
+    return renderer.domElement.toDataURL('image/png');
+  },
+  setTime(h) { state.hour = h; applyTimeOfDay(h); },
+  step(t) { advanceTo(t); },                       // physics only, no rendering (fast tests)
+  // Offline audio preview of `seconds` of simulation → stats + 16-bit PCM (base64), for testing and WAV previews.
+  async audioPreview(preset, hour, seconds = 8, fps = 30) {
+    applyWindPreset(preset); state.hour = hour;
+    setLoop(seconds); simTime = -seconds; lastWindTick = NaN; advanceTo(0);
+    const track = [];
+    for (let i = 0; i < seconds * fps; i++) { advanceTo(i / fps); track.push(soundState()); }
+    const { sampleRate, channels: [l, r] } = await renderLoopAudio(track, fps, seconds);
+    const pcm = new Int16Array(l.length * 2), perSecond = [];
+    let peak = 0, sum = 0, nan = 0, secSum = 0, step = 0;
+    for (let i = 0; i < l.length; i++) {
+      for (const [k, v] of [[0, l[i]], [1, r[i]]]) {
+        if (!Number.isFinite(v)) { nan++; continue; }
+        peak = Math.max(peak, Math.abs(v)); sum += v * v; secSum += v * v;
+        pcm[i * 2 + k] = Math.max(-32767, Math.min(32767, Math.round(v * 32767)));
+      }
+      if ((i + 1) % sampleRate === 0) { perSecond.push(+(Math.sqrt(secSum / (2 * sampleRate))).toFixed(4)); secSum = 0; }
+      if (i) step += Math.abs(l[i] - l[i - 1]);
+    }
+    const bytes = new Uint8Array(pcm.buffer);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 32768) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768));
+    return {
+      sampleRate, rms: Math.sqrt(sum / (2 * l.length)), peak, nan, perSecond,
+      wrapJump: Math.abs(l[l.length - 1] - l[0]), meanStep: step / (l.length - 1),
+      tipSpeed: +(track.reduce((a, s) => a + (s.left + s.right) / 2, 0) / track.length).toFixed(3),
+      b64: btoa(bin),
+    };
+  },
+  setWind(name, dirDeg) { applyWindPreset(name); if (dirDeg !== undefined) { setWindDir(dirDeg); computeShelter(); } },
+  async exportLoop(format, seconds, width) {
+    state.exporting = true;
+    try {
+      const blob = await encodeLoop({ format, seconds, width, onProgress: () => {} });
+      window.__lastExport = blob;
+      const head = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+      return { type: blob.type, size: blob.size, head: String.fromCharCode(...head).replace(/[^\x20-\x7e]/g, '.') };
+    } finally {
+      endExport();
+    }
+  },
+};
+
+if (!CAPTURE) {
+  setStatus(`${N.toLocaleString()} plants — settling…`);
+  applyTimeOfDay(state.live ? clockHour() : state.hour);
+  simTime = -3; advanceTo(0);
+  setStatus(`${N.toLocaleString()} plants`, 1500);
+
+  const clock = new THREE.Clock();
+  let t = 0, todTick = 0;
+  // If frames stay slower than ~40 fps, step the pixel density down (never back up within a visit).
+  let slowFor = 0, frameAvg = 1 / 60, warm = 0;
+  function adaptQuality(dt) {
+    frameAvg += (dt - frameAvg) * 0.05;
+    if ((warm += dt) < 3 || DPR <= 0.75) return;
+    slowFor = frameAvg > 1 / 40 ? slowFor + dt : 0;
+    if (slowFor > 2) {
+      DPR = Math.max(0.75, DPR - 0.25); slowFor = 0;
+      renderer.setPixelRatio(DPR);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+  }
+  renderer.setAnimationLoop(() => {
+    if (state.exporting) { clock.getDelta(); return; }
+    const dt = Math.min(clock.getDelta(), 1 / 20);
+    t += dt;
+    adaptQuality(dt);
+    if (state.live) state.hour = clockHour();
+    applyTimeOfDay(state.hour);
+    if ((todTick += dt) > 0.5) { todTick = 0; ui.syncTime(); }
+    pointer.strength += (pointer.target - pointer.strength) * 0.15;
+    if (simTime < t - 1) simTime = t - 1;           // never try to catch up after a stall
+    advanceTo(t);
+    syncGPU();
+    renderer.render(scene, camera);
+    tickSound();
+  });
+  ui.syncTime();
+
+  window.addEventListener('resize', () => {
+    if (state.exporting) return;
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  const ray = new THREE.Raycaster(), groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.15);
+  const hit = new THREE.Vector3();
+  const aim = (e) => {
+    ray.setFromCamera(new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+    if (ray.ray.intersectPlane(groundPlane, hit)) { pointer.x = hit.x; pointer.z = hit.z; }
+  };
+  const canvas = renderer.domElement;
+  canvas.addEventListener('pointerdown', (e) => { aim(e); pointer.target = 1; });
+  canvas.addEventListener('pointermove', (e) => { aim(e); if (e.pointerType === 'mouse') pointer.target = 0.6; });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) canvas.addEventListener(ev, () => { pointer.target = 0; });
+}
+</script>
+</body>
+</html>
