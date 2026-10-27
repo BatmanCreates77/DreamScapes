@@ -8,6 +8,7 @@ spring physics, grown in tufts of different species; gusts roll across the field
 |---|---|
 | `grass3d.html` | Close-up meadow grass in golden light |
 | `meadow.html` | Rolling hills with wildflower drifts (pink globes, violet spikes, white dots) |
+| `hills-photo.html` | The real wildflower-hills photo animated with a Depth Anything V2 depth map (`photo/hills_depth.png`: 16-bit disparity in R = high byte, G = low byte) |
 
 ## Run
 Serve this folder (the sound files load from `audio/`), then open a page:
