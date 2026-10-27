@@ -1063,17 +1063,18 @@ const skyU = {
   uInvProj: { value: new THREE.Matrix4() }, uCamWorld: { value: new THREE.Matrix4() },
   uHorizon: { value: new THREE.Color() }, uZenith: { value: new THREE.Color() }, uSunCol: { value: new THREE.Color() },
   uCloudShade: { value: new THREE.Color() }, uLoop: { value: new THREE.Vector2(0, 60) },
+  uCloud: { value: new THREE.Vector2() },              // x = drift (radians of sky), y = billow phase
 };
 const sky = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
   uniforms: skyU, depthTest: false, depthWrite: false,
   vertexShader: 'varying vec2 vNdc; void main() { vNdc = position.xy; gl_Position = vec4(position.xy, 0.9999, 1.0); }',
   fragmentShader: `
-    uniform mat4 uInvProj, uCamWorld; uniform vec3 uHorizon, uZenith, uSunCol, uCloudShade; uniform vec2 uLoop;
+    uniform mat4 uInvProj, uCamWorld; uniform vec3 uHorizon, uZenith, uSunCol, uCloudShade; uniform vec2 uLoop, uCloud;
     varying vec2 vNdc;
     ${NOISE_GLSL}
     float fbmS(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * snoise(p); p = p * 2.03 + 13.1; a *= 0.5; } return v; }
     float cloud(vec2 q, float el) {
-      vec2 w = q + 0.25 * vec2(snoise(q * 0.6 + 5.0), snoise(q * 0.6 - 3.0));
+      vec2 w = q + 0.25 * vec2(snoise(q * 0.6 + 5.0 + uCloud.y), snoise(q * 0.6 - 3.0 - uCloud.y));   // slowly billowing
       float shape = fbmS(w * 0.9) + 0.15;                                       // soft cauliflower lobes
       float tower = exp(-pow((q.x - 0.9) / 2.0, 2.0)) * 0.62 + exp(-pow((q.x + 2.9) / 1.4, 2.0)) * 0.4;   // two big cumulus masses
       float top = mix(0.12, 0.66, tower);                                       // how high each part rises (radians)
@@ -1084,8 +1085,7 @@ const sky = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMateri
       vec3 dir = normalize((uCamWorld * vec4(v.xyz / v.w, 0.0)).xyz);
       float el = asin(clamp(dir.y, -1.0, 1.0)), az = atan(dir.x, -dir.z);
       vec3 col = mix(uHorizon, uZenith, pow(smoothstep(0.0, 1.0, el), 0.55));
-      float drift = 0.03 * sin(6.2831853 * uLoop.x / uLoop.y);                // clouds creep and return over the loop
-      vec2 q = vec2((az + drift) * 3.2, el * 5.0);
+      vec2 q = vec2((az - uCloud.x) * 3.2, el * 5.0);
       float c = cloud(q, el);
       float h = smoothstep(0.04, 0.3, el);                                      // higher in the tower = more sunlit
       vec3 cc = mix(uCloudShade, uSunCol, clamp(0.35 + 0.9 * h + 0.35 * (1.0 - c) + 0.32 * fbmS(q * 3.0 + 7.0), 0.0, 1.0));   // cauliflower light and shadow
@@ -1094,6 +1094,7 @@ const sky = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMateri
     }`,
 }));
 sky.frustumCulled = false; sky.renderOrder = -1;
+const cloud = { offset: 0, billow: 0, last: 0 };
 scene.add(sky);
 
 /* ========================================================================== */
@@ -1201,6 +1202,18 @@ function syncGPU() {
   uniforms.uWind.value.set(wind.dir.x, wind.dir.y, wind.speed * (0.5 + 0.5 * wind.gust));
   uniforms.uLoop.value.set(((simTime % LOOP) + LOOP) % LOOP, LOOP);
   skyU.uLoop.value.copy(uniforms.uLoop.value);
+  // Clouds drift with the wind (faster in strong wind) and billow; a loop export sways them out and back instead,
+  // so the last frame still flows into the first.
+  if (state.exporting) {
+    const ph = (2 * Math.PI * uniforms.uLoop.value.x) / LOOP;
+    skyU.uCloud.value.set(cloud.offset + 0.04 * Math.sin(ph), cloud.billow + 0.15 * Math.sin(ph));
+  } else {
+    const dt = clamp(simTime - cloud.last, 0, 0.1);
+    cloud.offset += Math.sign(wind.dir.x || 1) * 0.006 * (0.5 + wind.speed / 6.5) * dt;
+    cloud.billow += 0.02 * dt;
+    skyU.uCloud.value.set(cloud.offset, cloud.billow);
+  }
+  cloud.last = simTime;
   skyU.uInvProj.value.copy(camera.projectionMatrixInverse); skyU.uCamWorld.value.copy(camera.matrixWorld);
   skyU.uHorizon.value.copy(scene.fog.color).lerp(hemi.color, 0.7);
   skyU.uZenith.value.copy(hemi.color).multiply(new THREE.Color(0.18, 0.4, 1.0)).multiplyScalar(0.8);
