@@ -433,6 +433,7 @@ const u = {
   uFront: { value: 2 }, uTurb: { value: 0.5 },
   uExposure: { value: 1 }, uTint: { value: new THREE.Vector3(1, 1, 1) }, uSat: { value: 1 },
   uDrift: { value: new THREE.Vector2() },
+  uOsc: { value: new THREE.Vector2(78, 48) },          // whole swing cycles per loop
 };
 scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
   uniforms: u,
@@ -440,7 +441,7 @@ scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial
   fragmentShader: /* glsl */ `
     uniform sampler2D uPhoto, uMotion;
     uniform float uImgAspect, uViewAspect, uT, uFront, uTurb, uExposure, uSat;
-    uniform vec4 uLoop, uWind; uniform vec3 uTint; uniform vec2 uDrift;
+    uniform vec4 uLoop, uWind; uniform vec3 uTint; uniform vec2 uDrift, uOsc;
     varying vec2 vUv;
     vec3 permute3(vec3 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
 float snoise(vec2 v) {
@@ -488,12 +489,15 @@ float snoise(vec2 v) {
       vec2 det = (detail(P, along, uT) * (1.0 - k) + detail(P, along, uT - uLoop.w) * k) / length(vec2(1.0 - k, k));
       float s = clamp(uWind.z / 6.5, 0.0, 1.0);
       // Sway in metres, then perspective: screen motion shrinks with distance (≈0.87 image-heights per metre at 1 m).
-      float A = (0.004 + 0.012 * s + 0.07 * s * s) * (0.35 + 1.3 * surge) * (1.0 + 0.5 * det.x);
+      // Back-and-forth swing (~1.3 Hz for grass, ~0.8 Hz for heavier flower heads), each stem on its own phase.
+      float ph = 6.2831853 * snoise(P * 2.5 + 3.7), w = 6.2831853 / uLoop.w;
+      float osc = mix(sin(uOsc.x * w * uT + ph), sin(uOsc.y * w * uT + ph), flower);
+      float A = (0.009 + 0.026 * s + 0.15 * s * s) * (0.35 + 1.3 * surge) * (1.0 + 0.5 * det.x) * (0.55 + 0.75 * osc);
       vec2 dir = normalize(vec2(uWind.x, 0.35 * uWind.y) + 1e-4);
       vec2 sway = (dir * A + vec2(det.y, 0.0) * 0.006 * (0.3 + surge)) * (0.87 / Z);
       sway.y -= length(sway) * 0.3;                    // tips dip a little as they bend
       float weight = pow(stick, 1.3) * (1.0 + 0.8 * flower);   // roots and ground stay put, heads swing most
-      vec2 disp = clamp(sway * weight, vec2(-0.02), vec2(0.02));
+      vec2 disp = clamp(sway * weight, vec2(-0.03), vec2(0.03));
       vec2 parallax = uDrift * max(d - 0.12, 0.0);      // slow handheld drift: far hills stay put, nearer layers shift
       vec3 col = texture2D(uPhoto, uv - disp - parallax).rgb;
       // Far hills: gusts show as brighter waves rolling over the grass.
@@ -528,6 +532,7 @@ function syncGPU() {
   u.uLoop.value.set(...gustHarmonics(), LOOP);
   u.uWind.value.set(wind.dir.x, wind.dir.y, wind.speed, wind.gust);
   u.uFront.value = gustFront(); u.uTurb.value = wind.turb;
+  u.uOsc.value.set(Math.max(1, Math.round(1.3 * LOOP)), Math.max(1, Math.round(0.8 * LOOP)));
   const ph = (2 * Math.PI * t) / LOOP;
   u.uDrift.value.set(Math.sin(ph) * 0.003, Math.cos(ph) * 0.0012);
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
