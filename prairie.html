@@ -803,7 +803,7 @@ groundMat.onBeforeCompile = (shader) => {
       // Gusts sweep over the hills as brighter waves; blended across the loop so exports stay seamless.
       float k = uLoop.x / uLoop.y;
       float wave = (windWave(p, uLoop.x) * (1.0 - k) + windWave(p, uLoop.x - uLoop.y) * k) / length(vec2(1.0 - k, k));
-      g *= 0.7 + 0.6 * smoothstep(-0.5, 0.8, wave);                       // combed bands: troughs dark, crests catching light
+      g *= 0.86 + 0.28 * smoothstep(-0.5, 0.8, wave);                       // combed bands: troughs dark, crests catching light
       g *= 0.75 * mix(0.45, 1.0, smoothstep(14.0, 26.0, d));   // match the shaded blade tops where the 3D grass ends                      // dark roots under the near physics grass
       diffuseColor.rgb = g;`);
 };
@@ -1058,44 +1058,6 @@ meadow.castShadow = meadow.receiveShadow = true;
 meadow.frustumCulled = false;
 scene.add(meadow);
 
-// Sky: blue gradient with sunlit cumulus towers rising from flat bases near the horizon (drawn first, behind everything).
-const skyU = {
-  uInvProj: { value: new THREE.Matrix4() }, uCamWorld: { value: new THREE.Matrix4() },
-  uHorizon: { value: new THREE.Color() }, uZenith: { value: new THREE.Color() }, uSunCol: { value: new THREE.Color() },
-  uCloudShade: { value: new THREE.Color() }, uLoop: { value: new THREE.Vector2(0, 60) },
-  uCloud: { value: new THREE.Vector2() },              // x = drift (radians of sky), y = billow phase
-};
-const sky = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
-  uniforms: skyU, depthTest: false, depthWrite: false,
-  vertexShader: 'varying vec2 vNdc; void main() { vNdc = position.xy; gl_Position = vec4(position.xy, 0.9999, 1.0); }',
-  fragmentShader: `
-    uniform mat4 uInvProj, uCamWorld; uniform vec3 uHorizon, uZenith, uSunCol, uCloudShade; uniform vec2 uLoop, uCloud;
-    varying vec2 vNdc;
-    ${NOISE_GLSL}
-    float fbmS(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * snoise(p); p = p * 2.03 + 13.1; a *= 0.5; } return v; }
-    float cloud(vec2 q, float el) {
-      vec2 w = q + 0.25 * vec2(snoise(q * 0.6 + 5.0 + uCloud.y), snoise(q * 0.6 - 3.0 - uCloud.y));   // slowly billowing
-      float shape = fbmS(w * 0.9) + 0.15;                                       // soft cauliflower lobes
-      float tower = exp(-pow((q.x - 0.9) / 2.0, 2.0)) * 0.62 + exp(-pow((q.x + 2.9) / 1.4, 2.0)) * 0.4;   // two big cumulus masses
-      float top = mix(0.12, 0.66, tower);                                       // how high each part rises (radians)
-      return smoothstep(0.05, 0.3, shape * (0.55 + tower) + 0.35 * tower - 0.12) * smoothstep(0.03, 0.06, el) * smoothstep(top + 0.06 * fbmS(q * 1.6 + 2.0), top - 0.05, el);   // lumpy cauliflower crowns, not a flat fade
-    }
-    void main() {
-      vec4 v = uInvProj * vec4(vNdc, 1.0, 1.0);
-      vec3 dir = normalize((uCamWorld * vec4(v.xyz / v.w, 0.0)).xyz);
-      float el = asin(clamp(dir.y, -1.0, 1.0)), az = atan(dir.x, -dir.z);
-      vec3 col = mix(uHorizon, uZenith, pow(smoothstep(0.0, 1.0, el), 0.55));
-      vec2 q = vec2((az - uCloud.x) * 3.2, el * 5.0);
-      float c = cloud(q, el);
-      float h = smoothstep(0.04, 0.3, el);                                      // higher in the tower = more sunlit
-      vec3 cc = mix(uCloudShade, uSunCol, clamp(0.35 + 0.9 * h + 0.35 * (1.0 - c) + 0.32 * fbmS(q * 3.0 + 7.0), 0.0, 1.0));   // cauliflower light and shadow
-      gl_FragColor = vec4(mix(col, cc, c), 1.0);
-      #include <colorspace_fragment>
-    }`,
-}));
-sky.frustumCulled = false; sky.renderOrder = -1;
-const cloud = { offset: 0, billow: 0, last: 0 };
-scene.add(sky);
 
 /* ========================================================================== */
 /*  Time of day                                                               */
@@ -1125,8 +1087,253 @@ const SUNRISE = 5.9, DAYLEN = 14;
 function sunDirection(hour) {
   const f = clamp((hour - SUNRISE) / DAYLEN, 0, 1);
   const el = THREE.MathUtils.degToRad(Math.max(2, Math.sin(Math.PI * f) * 55));
-  const az = THREE.MathUtils.degToRad(105 - 210 * f);     // rises on the right, sets on the left (behind the trees)
+  const az = THREE.MathUtils.degToRad(120 - 170 * f);     // rises behind-right, sets ahead-left (in view)
   return new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
+}
+
+/* ========================================================================== */
+/*  Sky: physically based atmosphere + volumetric cumulus                     */
+/* ========================================================================== */
+// Single-scattering atmosphere (Rayleigh + Mie) gives the sky its colour for the sun's real position: blue at
+// noon, glow around the sun, orange/pink at the horizon at sunrise and sunset, twilight, moonlit night.
+// Clouds are a 3D layer 1.3–3.6 km up, ray-marched and lit by the sun through the atmosphere (Beer–Lambert,
+// Henyey–Greenstein phase, a powder term and a cheap multiple-scattering lobe). Rendered at 1/3 resolution.
+const ATM = { Re: 6360e3, Ra: 6420e3, Hr: 7994, Hm: 1200, bR: [5.8e-6, 13.5e-6, 33.1e-6], bM: 21e-6 };
+const SUN_I = 20;
+const sphereFar = (o, d, r) => { const b = o[0] * d[0] + o[1] * d[1] + o[2] * d[2], c = o[0] ** 2 + o[1] ** 2 + o[2] ** 2 - r * r, h = b * b - c; return h < 0 ? -1 : -b + Math.sqrt(h); };
+function scatterJS(rd, sd, I) {
+  const ro = [0, ATM.Re + 2, 0], tmax = sphereFar(ro, rd, ATM.Ra), seg = tmax / 12, mu = rd[0] * sd[0] + rd[1] * sd[1] + rd[2] * sd[2], g = 0.76;
+  const pR = 3 / (16 * Math.PI) * (1 + mu * mu), pM = 3 / (8 * Math.PI) * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * Math.pow(1 + g * g - 2 * g * mu, 1.5));
+  let odR = 0, odM = 0; const sR = [0, 0, 0], sM = [0, 0, 0];
+  for (let i = 0; i < 12; i++) {
+    const p = ro.map((v, k) => v + rd[k] * seg * (i + 0.5)), h = Math.hypot(...p) - ATM.Re, hr = Math.exp(-h / ATM.Hr) * seg, hm = Math.exp(-h / ATM.Hm) * seg;
+    odR += hr; odM += hm;
+    const sl = sphereFar(p, sd, ATM.Ra) / 6; let lR = 0, lM = 0, lit = true;
+    for (let j = 0; j < 6; j++) {
+      const hl = Math.hypot(...p.map((v, k) => v + sd[k] * sl * (j + 0.5))) - ATM.Re;
+      if (hl < 0) { lit = false; break; }
+      lR += Math.exp(-hl / ATM.Hr) * sl; lM += Math.exp(-hl / ATM.Hm) * sl;
+    }
+    if (lit) for (let k = 0; k < 3; k++) { const a = Math.exp(-(ATM.bR[k] * (odR + lR) + ATM.bM * 1.1 * (odM + lM))); sR[k] += a * hr; sM[k] += a * hm; }
+  }
+  return [0, 1, 2].map((k) => I * (sR[k] * ATM.bR[k] * pR + sM[k] * ATM.bM * pM));
+}
+// Colour of sunlight that reaches a point at `height` metres (reddens as the sun gets low).
+function transmittanceJS(sd, height) {
+  const p0 = [0, ATM.Re + height, 0], t = sphereFar(p0, sd, ATM.Ra), seg = t / 12; let odR = 0, odM = 0;
+  for (let i = 0; i < 12; i++) {
+    const h = Math.hypot(...p0.map((v, k) => v + sd[k] * seg * (i + 0.5))) - ATM.Re;
+    if (h < 0) return [0, 0, 0];
+    odR += Math.exp(-h / ATM.Hr) * seg; odM += Math.exp(-h / ATM.Hm) * seg;
+  }
+  return ATM.bR.map((b) => Math.exp(-(b * odR + ATM.bM * 1.1 * odM)));
+}
+// The sun's true position (allowed below the horizon, so twilight works).
+function skySunDir(hour) {
+  const f = (hour - SUNRISE) / DAYLEN, el = THREE.MathUtils.degToRad(Math.sin(Math.PI * f) * 55), az = THREE.MathUtils.degToRad(120 - 170 * clamp(f, -0.3, 1.3));
+  return [Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)];
+}
+const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+const SKY_SCALE = 0.34 / lum(scatterJS([0, 1, 0], skySunDir(13), SUN_I));   // noon zenith → a natural blue
+
+// Tileable Perlin–Worley noise (R: billowy cloud body, G: finer erosion detail), generated once at load.
+function makeCloudNoise(N = 64) {
+  const ih = (x, y, z, s) => { let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(z, 1274126177) + Math.imul(s, 144665)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  const wrap = (a, p) => ((a % p) + p) % p, fade = (t) => t * t * (3 - 2 * t);
+  const vnoise = (x, y, z, p, s) => {
+    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z), fx = fade(x - xi), fy = fade(y - yi), fz = fade(z - zi);
+    let v = 0;
+    for (let k = 0; k < 2; k++) for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) {
+      v += (i ? fx : 1 - fx) * (j ? fy : 1 - fy) * (k ? fz : 1 - fz) * ih(wrap(xi + i, p), wrap(yi + j, p), wrap(zi + k, p), s);
+    }
+    return v;
+  };
+  const worley = (x, y, z, p, s) => {
+    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z); let m = 9;
+    for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const cx = xi + dx, cy = yi + dy, cz = zi + dz, wx = wrap(cx, p), wy = wrap(cy, p), wz = wrap(cz, p);
+      const ex = cx + ih(wx, wy, wz, s) - x, ey = cy + ih(wx, wy, wz, s + 1) - y, ez = cz + ih(wx, wy, wz, s + 2) - z;
+      m = Math.min(m, ex * ex + ey * ey + ez * ez);
+    }
+    return 1 - Math.min(1, Math.sqrt(m));
+  };
+  const data = new Uint8Array(N * N * N * 2);
+  for (let z = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const u = x / N, v = y / N, w = z / N, i = (z * N * N + y * N + x) * 2;
+    const per = vnoise(u * 4, v * 4, w * 4, 4, 1) * 0.5 + vnoise(u * 8, v * 8, w * 8, 8, 2) * 0.3 + vnoise(u * 16, v * 16, w * 16, 16, 3) * 0.2;
+    const w1 = worley(u * 4, v * 4, w * 4, 4, 10), w2 = worley(u * 8, v * 8, w * 8, 8, 20), w3 = worley(u * 16, v * 16, w * 16, 16, 30);
+    const wf = w1 * 0.625 + w2 * 0.25 + w3 * 0.125;
+    data[i] = clamp((per - wf + 1) / (2 - wf), 0, 1) * 255;          // Perlin–Worley: rounded cauliflower lumps
+    data[i + 1] = (w2 * 0.5 + w3 * 0.5) * 255;
+  }
+  const tex = new THREE.Data3DTexture(data, N, N, N);
+  tex.format = THREE.RGFormat; tex.wrapS = tex.wrapT = tex.wrapR = THREE.RepeatWrapping;
+  tex.minFilter = tex.magFilter = THREE.LinearFilter; tex.unpackAlignment = 1; tex.needsUpdate = true;
+  return tex;
+}
+
+const skyU = {
+  uNoise: { value: makeCloudNoise() },
+  uInvProj: { value: new THREE.Matrix4() }, uCamWorld: { value: new THREE.Matrix4() },
+  uSunDir: { value: new THREE.Vector3() }, uMoonDir: { value: MOON_DIR_SKY() }, uSunI: { value: SUN_I }, uMoonI: { value: 0 },
+  uLightDir: { value: new THREE.Vector3(0, 1, 0) }, uLightCol: { value: new THREE.Vector3() },
+  uAmbTop: { value: new THREE.Vector3() }, uAmbBot: { value: new THREE.Vector3() }, uFog: { value: new THREE.Vector3() },
+  uSkyScale: { value: SKY_SCALE }, uCoverage: { value: 0.5 }, uWind: { value: new THREE.Vector3() }, uCamH: { value: CAM.height },
+};
+function MOON_DIR_SKY() { return new THREE.Vector3(0.45, 0.62, -0.65).normalize(); }
+
+const skyRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+const skyScene = new THREE.Scene();
+skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+  uniforms: skyU, depthTest: false, depthWrite: false,
+  vertexShader: 'varying vec2 vNdc; void main() { vNdc = position.xy; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: /* glsl */ `
+    precision highp sampler3D;
+    uniform sampler3D uNoise;
+    uniform mat4 uInvProj, uCamWorld;
+    uniform vec3 uSunDir, uMoonDir, uLightDir, uLightCol, uAmbTop, uAmbBot, uFog, uWind;
+    uniform float uSunI, uMoonI, uSkyScale, uCoverage, uCamH;
+    varying vec2 vNdc;
+    const float PI = 3.14159265, Re = 6360e3, Ra = 6420e3, Hr = 7994.0, Hm = 1200.0, bM = 21e-6;
+    const vec3 bR = vec3(5.8e-6, 13.5e-6, 33.1e-6);
+    const float CB = 1300.0, CT = 3600.0;
+    float sphereFar(vec3 o, vec3 d, float r) { float b = dot(o, d), c = dot(o, o) - r * r, h = b * b - c; return h < 0.0 ? -1.0 : -b + sqrt(h); }
+    vec3 scatter(vec3 rd, vec3 sd, float I) {
+      vec3 ro = vec3(0.0, Re + 2.0, 0.0);
+      float seg = sphereFar(ro, rd, Ra) / 12.0, odR = 0.0, odM = 0.0, mu = dot(rd, sd), g = 0.76;
+      float pR = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
+      float pM = 3.0 / (8.0 * PI) * ((1.0 - g * g) * (1.0 + mu * mu)) / ((2.0 + g * g) * pow(1.0 + g * g - 2.0 * g * mu, 1.5));
+      vec3 sR = vec3(0.0), sM = vec3(0.0);
+      for (int i = 0; i < 12; i++) {
+        vec3 p = ro + rd * (seg * (float(i) + 0.5));
+        float h = length(p) - Re, hr = exp(-h / Hr) * seg, hm = exp(-h / Hm) * seg;
+        odR += hr; odM += hm;
+        float sl = sphereFar(p, sd, Ra) / 6.0, lR = 0.0, lM = 0.0; bool lit = true;
+        for (int j = 0; j < 6; j++) {
+          float hl = length(p + sd * (sl * (float(j) + 0.5))) - Re;
+          if (hl < 0.0) { lit = false; break; }
+          lR += exp(-hl / Hr) * sl; lM += exp(-hl / Hm) * sl;
+        }
+        if (lit) { vec3 a = exp(-(bR * (odR + lR) + bM * 1.1 * (odM + lM))); sR += a * hr; sM += a * hm; }
+      }
+      return I * (sR * bR * pR + sM * bM * pM);
+    }
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    // Cloud density: a slowly drifting "weather" map decides where cumulus grow and how tall; the 3D noise
+    // gives them billowing bodies; finer noise erodes the edges into wisps.
+    float density(vec3 p, bool detail) {
+      float hf = (p.y - CB) / (CT - CB);
+      vec2 xz = p.xz - uWind.xy;
+      float wm = texture(uNoise, vec3(xz * 0.000035, 0.37)).r;
+      float cov = clamp(uCoverage + (wm - 0.55) * 1.6, 0.0, 1.0);    // clustered: towers here, clear sky there
+      float top = mix(0.3, 1.0, smoothstep(0.5, 0.85, wm));
+      float prof = smoothstep(0.0, 0.06, hf) * smoothstep(top, top * 0.5, hf);   // flat base, rounded crown
+      vec3 q = vec3(xz.x, p.y, xz.y) * 0.00022 + vec3(0.0, uWind.z, 0.0);
+      float d = (texture(uNoise, q).r * prof - (1.0 - cov)) / max(cov, 0.05);
+      if (detail && d > 0.0) d -= (1.0 - texture(uNoise, q * 4.1 + 0.3).g) * 0.35 * (1.0 - hf * 0.6);
+      return clamp(d, 0.0, 1.0);
+    }
+    float hg(float c, float g) { float g2 = g * g; return (1.0 - g2) / pow(1.0 + g2 - 2.0 * g * c, 1.5); }   // ×4π-normalised
+    void main() {
+      vec4 v = uInvProj * vec4(vNdc, 1.0, 1.0);
+      vec3 rd = normalize((uCamWorld * vec4(v.xyz / v.w, 0.0)).xyz);
+      vec3 rs = normalize(vec3(rd.x, max(rd.y, 0.0015), rd.z));
+      vec3 ra = normalize(vec3(rd.x, max(rd.y, 0.045), rd.z));        // atmosphere sampled no lower than ~2.6°
+      vec3 sky = (scatter(ra, uSunDir, uSunI) + scatter(ra, uMoonDir, uMoonI)) * uSkyScale + vec3(0.0004, 0.0008, 0.002);
+      // Sun and moon discs, then stars where the sky is dark.
+      sky += smoothstep(0.99996, 0.99999, dot(rs, uSunDir)) * uLightCol * 30.0 * step(0.0, uSunDir.y);
+      sky += smoothstep(0.99994, 0.99997, dot(rs, uMoonDir)) * vec3(0.9, 0.92, 1.0) * uMoonI * 1.5;
+      float night = 1.0 - smoothstep(0.004, 0.04, dot(sky, vec3(0.3, 0.5, 0.2)));
+      vec2 sp = vec2(atan(rs.x, -rs.z), asin(rs.y)) * 700.0;
+      sky += night * step(0.9975, hash(floor(sp))) * smoothstep(0.35, 0.0, length(fract(sp) - 0.5)) * vec3(0.35, 0.38, 0.45);
+      vec3 col = sky;
+      if (rs.y > 0.0) {
+        float t0 = (CB - uCamH) / rs.y, t1 = min((CT - uCamH) / rs.y, t0 + 20000.0);
+        if (t0 < 80000.0) {
+          float stepL = (t1 - t0) / 30.0, t = t0 + stepL * hash(gl_FragCoord.xy), T = 1.0;
+          float c = dot(rs, uLightDir), ph = mix(hg(c, 0.6), hg(c, -0.25), 0.3);
+          vec3 L = vec3(0.0);
+          for (int i = 0; i < 30; i++) {
+            vec3 p = vec3(0.0, uCamH, 0.0) + rs * t;
+            float d = density(p, true);
+            if (d > 0.003) {
+              float od = 0.0;
+              for (int j = 1; j <= 4; j++) od += density(p + uLightDir * (float(j * j) * 90.0), false) * float(2 * j - 1) * 90.0;
+              const float sig = 0.045;                                     // extinction per metre at full density
+              float Tl = max(exp(-od * sig * 0.6), exp(-od * sig * 0.15) * 0.6);   // 2nd lobe ≈ multiple scattering
+              float powder = 1.0 - exp(-d * stepL * sig * 2.0);
+              vec3 amb = mix(uAmbBot, uAmbTop, clamp((p.y - CB) / (CT - CB), 0.0, 1.0));
+              vec3 S = uLightCol * Tl * ph * mix(0.6, 1.0, powder) + amb;
+              float a = exp(-d * sig * stepL);
+              L += T * S * (1.0 - a);
+              T *= a;
+              if (T < 0.02) break;
+            }
+            t += stepL;
+          }
+          col = mix(sky, sky * T + L, exp(-t0 / 22000.0));                // distant clouds melt into the haze
+        }
+      }
+      col = mix(uFog, col, smoothstep(0.0, 0.035, rd.y));               // sky meets the land's haze without a seam
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+})));
+// The sky texture is stretched behind everything (tone-mapped like the rest of the scene).
+const sky = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+  uniforms: { uSky: { value: skyRT.texture }, uTexel: { value: new THREE.Vector2(1, 1) } }, depthTest: false, depthWrite: false,
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.9999, 1.0); }',
+  // Four offset bilinear taps (a tent filter) so the 1/3-resolution sky scales up without stair-steps.
+  fragmentShader: `uniform sampler2D uSky; uniform vec2 uTexel; varying vec2 vUv;
+    void main() {
+      vec3 c = texture2D(uSky, vUv + uTexel * vec2(-0.5, -0.5)).rgb + texture2D(uSky, vUv + uTexel * vec2(0.5, -0.5)).rgb
+             + texture2D(uSky, vUv + uTexel * vec2(-0.5, 0.5)).rgb + texture2D(uSky, vUv + uTexel * vec2(0.5, 0.5)).rgb;
+      gl_FragColor = vec4(c * 0.25, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`,
+}));
+sky.frustumCulled = false; sky.renderOrder = -1;
+scene.add(sky);
+const cloud = { x: 0, z: 0, evolve: 0, last: 0 };
+
+// Per hour: sun/moon, light reaching the clouds, sky ambient and the horizon haze — all from the same atmosphere.
+const _sizeV = new THREE.Vector2();
+function updateSky(hour) {
+  const sd = skySunDir(hour), mi = TOD_MOON(hour);
+  skyU.uSunDir.value.set(...sd); skyU.uMoonI.value = SUN_I * 0.004 * mi;
+  const sunVis = smoothstep(-0.07, 0.03, sd[1]), sunT = transmittanceJS(sd, 2500);
+  if (sunVis > 0.02) { skyU.uLightDir.value.set(...sd); skyU.uLightCol.value.set(...sunT.map((v) => v * 5.2 * sunVis)); }
+  else { skyU.uLightDir.value.copy(skyU.uMoonDir.value); skyU.uLightCol.value.set(0.05, 0.06, 0.09).multiplyScalar(mi); }
+  const add = (a, b) => a.map((v, k) => v + b[k]);
+  const at = (dir) => add(scatterJS(dir, sd, SUN_I), scatterJS(dir, skyU.uMoonDir.value.toArray(), skyU.uMoonI.value)).map((v, k) => v * SKY_SCALE + [0.0004, 0.0008, 0.002][k]);
+  const zen = at([0, 1, 0]), hor = at([0, 0.05, -0.99875]);
+  skyU.uAmbTop.value.set(...zen.map((v) => v * 2.2 + 0.004 * mi));
+  skyU.uAmbBot.value.set(...zen.map((v, k) => v * 0.8 + [hemi.groundColor.r, hemi.groundColor.g, hemi.groundColor.b][k] * hemi.intensity * 0.05));
+  skyU.uFog.value.set(...hor);
+  scene.fog.color.setRGB(...hor); scene.background.copy(scene.fog.color);
+}
+function TOD_MOON(h) { h = ((h % 24) + 24) % 24; let i = 0; while (i < TOD.length - 2 && TOD[i + 1].h <= h) i++; const a = TOD[i], b = TOD[i + 1]; return a.mi + (b.mi - a.mi) * smoothstep(0, 1, (h - a.h) / (b.h - a.h)); }
+
+function renderSky() {
+  // Clouds ride the upper wind (direction from the dial, faster than at the ground) and slowly change shape;
+  // a loop export sways them out and back so the last frame flows into the first.
+  const speed = 6 + 2.5 * wind.speed;
+  if (state.exporting) {
+    const ph = (2 * Math.PI * uniforms.uLoop.value.x) / LOOP, a = Math.sin(ph) * speed * 1.5;
+    skyU.uWind.value.set(cloud.x + wind.dir.x * a, cloud.z + wind.dir.y * a, cloud.evolve + 0.002 * Math.sin(ph));
+  } else {
+    const dt = clamp(simTime - cloud.last, 0, 0.1);
+    cloud.x += wind.dir.x * speed * dt; cloud.z += wind.dir.y * speed * dt;
+    cloud.evolve += dt * 0.00012 * (1 + wind.turb);
+    skyU.uWind.value.set(cloud.x, cloud.z, cloud.evolve);
+  }
+  cloud.last = simTime;
+  skyU.uCoverage.value = 0.3 + 0.06 * wind.gust + 0.25 * smoothstep(4, 6.5, wind.speed);   // stormier wind, fuller sky
+  skyU.uInvProj.value.copy(camera.projectionMatrixInverse); skyU.uCamWorld.value.copy(camera.matrixWorld);
+  renderer.getDrawingBufferSize(_sizeV);
+  const w = Math.max(1, Math.ceil(_sizeV.x / 3)), h = Math.max(1, Math.ceil(_sizeV.y / 3));
+  if (skyRT.width !== w || skyRT.height !== h) { skyRT.setSize(w, h); sky.material.uniforms.uTexel.value.set(1 / w, 1 / h); }
+  renderer.setRenderTarget(skyRT); renderer.render(skyScene, camera); renderer.setRenderTarget(null);
 }
 
 const _c = new THREE.Color();
@@ -1154,6 +1361,7 @@ function applyTimeOfDay(hour) {
   hemi.intensity = lerp(a.hi, b.hi);
   scene.fog.color.copy(a.fog).lerp(b.fog, k);
   scene.background.copy(scene.fog.color);
+  updateSky(hour);                                 // haze, sky light and cloud lighting from the atmosphere
   renderer.toneMappingExposure = lerp(a.ex, b.ex);
   uniforms.uTransK.value = lerp(a.tr, b.tr);
   // Trees stand to the left: they only throw shadows when the light comes from that side.
@@ -1201,24 +1409,7 @@ function syncGPU() {
   uniforms.uTime.value = simTime;
   uniforms.uWind.value.set(wind.dir.x, wind.dir.y, wind.speed * (0.5 + 0.5 * wind.gust));
   uniforms.uLoop.value.set(((simTime % LOOP) + LOOP) % LOOP, LOOP);
-  skyU.uLoop.value.copy(uniforms.uLoop.value);
-  // Clouds drift with the wind (faster in strong wind) and billow; a loop export sways them out and back instead,
-  // so the last frame still flows into the first.
-  if (state.exporting) {
-    const ph = (2 * Math.PI * uniforms.uLoop.value.x) / LOOP;
-    skyU.uCloud.value.set(cloud.offset + 0.04 * Math.sin(ph), cloud.billow + 0.15 * Math.sin(ph));
-  } else {
-    const dt = clamp(simTime - cloud.last, 0, 0.1);
-    cloud.offset += Math.sign(wind.dir.x || 1) * 0.006 * (0.5 + wind.speed / 6.5) * dt;
-    cloud.billow += 0.02 * dt;
-    skyU.uCloud.value.set(cloud.offset, cloud.billow);
-  }
-  cloud.last = simTime;
-  skyU.uInvProj.value.copy(camera.projectionMatrixInverse); skyU.uCamWorld.value.copy(camera.matrixWorld);
-  skyU.uHorizon.value.copy(scene.fog.color).lerp(hemi.color, 0.7);
-  skyU.uZenith.value.copy(hemi.color).multiply(new THREE.Color(0.18, 0.4, 1.0)).multiplyScalar(0.8);
-  skyU.uSunCol.value.copy(sun.color).multiplyScalar(Math.min(1.15, 0.25 + sun.intensity / 4.5)).add(hemi.color.clone().multiplyScalar(0.15));
-  skyU.uCloudShade.value.copy(hemi.color).multiplyScalar(0.55).lerp(scene.fog.color, 0.35);
+  renderSky();
   const ph = (2 * Math.PI * simTime) / LOOP;            // trees sway gently, periodic with the loop
   uniforms.uCanopyDrift.value.set(Math.sin(ph) * 0.025, Math.cos(ph * 2) * 0.012);
 }
