@@ -1,0 +1,6 @@
+{
+  "buildCommand": "mkdir -p public/audio && cp grass3d.html public/index.html && cp audio/*.mp3 audio/CREDITS.md public/audio/",
+  "outputDirectory": "public",
+  "installCommand": "",
+  "framework": null
+}
