@@ -1087,7 +1087,7 @@ const SUNRISE = 5.9, DAYLEN = 14;
 function sunDirection(hour) {
   const f = clamp((hour - SUNRISE) / DAYLEN, 0, 1);
   const el = THREE.MathUtils.degToRad(Math.max(2, Math.sin(Math.PI * f) * 55));
-  const az = THREE.MathUtils.degToRad(120 - 170 * f);     // rises behind-right, sets ahead-left (in view)
+  const az = THREE.MathUtils.degToRad(100 + 200 * f);     // rises right, passes behind you at noon (deep-blue sky ahead), sets ahead-left in view
   return new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
 }
 
@@ -1098,7 +1098,7 @@ function sunDirection(hour) {
 // noon, glow around the sun, orange/pink at the horizon at sunrise and sunset, twilight, moonlit night.
 // Clouds are a 3D layer 1.3–3.6 km up, ray-marched and lit by the sun through the atmosphere (Beer–Lambert,
 // Henyey–Greenstein phase, a powder term and a cheap multiple-scattering lobe). Rendered at 1/3 resolution.
-const ATM = { Re: 6360e3, Ra: 6420e3, Hr: 7994, Hm: 1200, bR: [5.8e-6, 13.5e-6, 33.1e-6], bM: 21e-6 };
+const ATM = { Re: 6360e3, Ra: 6420e3, Hr: 7994, Hm: 1200, bR: [5.8e-6, 13.5e-6, 33.1e-6], bO: [0.65e-6, 1.881e-6, 0.085e-6], bM: 21e-6 };
 const SUN_I = 20;
 const sphereFar = (o, d, r) => { const b = o[0] * d[0] + o[1] * d[1] + o[2] * d[2], c = o[0] ** 2 + o[1] ** 2 + o[2] ** 2 - r * r, h = b * b - c; return h < 0 ? -1 : -b + Math.sqrt(h); };
 function scatterJS(rd, sd, I) {
@@ -1114,7 +1114,7 @@ function scatterJS(rd, sd, I) {
       if (hl < 0) { lit = false; break; }
       lR += Math.exp(-hl / ATM.Hr) * sl; lM += Math.exp(-hl / ATM.Hm) * sl;
     }
-    if (lit) for (let k = 0; k < 3; k++) { const a = Math.exp(-(ATM.bR[k] * (odR + lR) + ATM.bM * 1.1 * (odM + lM))); sR[k] += a * hr; sM[k] += a * hm; }
+    if (lit) for (let k = 0; k < 3; k++) { const a = Math.exp(-((ATM.bR[k] + ATM.bO[k]) * (odR + lR) + ATM.bM * 1.1 * (odM + lM))); sR[k] += a * hr; sM[k] += a * hm; }
   }
   return [0, 1, 2].map((k) => I * (sR[k] * ATM.bR[k] * pR + sM[k] * ATM.bM * pM));
 }
@@ -1126,15 +1126,15 @@ function transmittanceJS(sd, height) {
     if (h < 0) return [0, 0, 0];
     odR += Math.exp(-h / ATM.Hr) * seg; odM += Math.exp(-h / ATM.Hm) * seg;
   }
-  return ATM.bR.map((b) => Math.exp(-(b * odR + ATM.bM * 1.1 * odM)));
+  return ATM.bR.map((b, k) => Math.exp(-((b + ATM.bO[k]) * odR + ATM.bM * 1.1 * odM)));
 }
 // The sun's true position (allowed below the horizon, so twilight works).
 function skySunDir(hour) {
-  const f = (hour - SUNRISE) / DAYLEN, el = THREE.MathUtils.degToRad(Math.sin(Math.PI * f) * 55), az = THREE.MathUtils.degToRad(120 - 170 * clamp(f, -0.3, 1.3));
+  const f = (hour - SUNRISE) / DAYLEN, el = THREE.MathUtils.degToRad(Math.sin(Math.PI * f) * 55), az = THREE.MathUtils.degToRad(100 + 200 * clamp(f, -0.3, 1.3));
   return [Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)];
 }
 const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-const SKY_SCALE = 0.34 / lum(scatterJS([0, 1, 0], skySunDir(13), SUN_I));   // noon zenith → a natural blue
+const SKY_SCALE = 0.19 / lum(scatterJS([0, 1, 0], skySunDir(13), SUN_I));   // noon zenith → a natural blue
 
 // Tileable Perlin–Worley noise (R: billowy cloud body, G: finer erosion detail), generated once at load.
 function makeCloudNoise(N = 64) {
@@ -1195,8 +1195,8 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
     uniform float uSunI, uMoonI, uSkyScale, uCoverage, uCamH;
     varying vec2 vNdc;
     const float PI = 3.14159265, Re = 6360e3, Ra = 6420e3, Hr = 7994.0, Hm = 1200.0, bM = 21e-6;
-    const vec3 bR = vec3(5.8e-6, 13.5e-6, 33.1e-6);
-    const float CB = 1300.0, CT = 3600.0;
+    const vec3 bR = vec3(5.8e-6, 13.5e-6, 33.1e-6), bO = vec3(0.65e-6, 1.881e-6, 0.085e-6);   // ozone: absorbs yellow-green
+    const float CB = 1400.0, CT = 2700.0;                          // fair-weather cumulus: shallow, flat-based
     float sphereFar(vec3 o, vec3 d, float r) { float b = dot(o, d), c = dot(o, o) - r * r, h = b * b - c; return h < 0.0 ? -1.0 : -b + sqrt(h); }
     vec3 scatter(vec3 rd, vec3 sd, float I) {
       vec3 ro = vec3(0.0, Re + 2.0, 0.0);
@@ -1214,7 +1214,7 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
           if (hl < 0.0) { lit = false; break; }
           lR += exp(-hl / Hr) * sl; lM += exp(-hl / Hm) * sl;
         }
-        if (lit) { vec3 a = exp(-(bR * (odR + lR) + bM * 1.1 * (odM + lM))); sR += a * hr; sM += a * hm; }
+        if (lit) { vec3 a = exp(-((bR + bO) * (odR + lR) + bM * 1.1 * (odM + lM))); sR += a * hr; sM += a * hm; }
       }
       return I * (sR * bR * pR + sM * bM * pM);
     }
@@ -1225,13 +1225,13 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
       float hf = (p.y - CB) / (CT - CB);
       vec2 xz = p.xz - uWind.xy;
       float wm = texture(uNoise, vec3(xz * 0.000035, 0.37)).r;
-      float cov = clamp(uCoverage + (wm - 0.55) * 1.6, 0.0, 1.0);    // clustered: towers here, clear sky there
-      float top = mix(0.3, 1.0, smoothstep(0.5, 0.85, wm));
-      float prof = smoothstep(0.0, 0.06, hf) * smoothstep(top, top * 0.5, hf);   // flat base, rounded crown
+      float cov = clamp(uCoverage + (wm - 0.55) * 0.6, 0.0, 1.0);    // scattered, separate puffs
+      float top = mix(0.55, 1.0, smoothstep(0.45, 0.8, wm));
+      float prof = smoothstep(0.0, 0.08, hf) * smoothstep(top, top * 0.35, hf);  // flat base, rounded cauliflower crown
       vec3 q = vec3(xz.x, p.y, xz.y) * 0.00022 + vec3(0.0, uWind.z, 0.0);
       float d = (texture(uNoise, q).r * prof - (1.0 - cov)) / max(cov, 0.05);
-      if (detail && d > 0.0) d -= (1.0 - texture(uNoise, q * 4.1 + 0.3).g) * 0.35 * (1.0 - hf * 0.6);
-      return clamp(d, 0.0, 1.0);
+      if (detail && d > 0.0) d -= (1.0 - texture(uNoise, q * 4.1 + 0.3).g) * 0.16 * (1.0 - hf * 0.6);   // crisp edges, little wisp
+      return clamp(d * 1.8, 0.0, 1.0);                               // dense bodies → crisp silhouettes
     }
     float hg(float c, float g) { float g2 = g * g; return (1.0 - g2) / pow(1.0 + g2 - 2.0 * g * c, 1.5); }   // ×4π-normalised
     void main() {
@@ -1260,10 +1260,10 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
               float od = 0.0;
               for (int j = 1; j <= 4; j++) od += density(p + uLightDir * (float(j * j) * 90.0), false) * float(2 * j - 1) * 90.0;
               const float sig = 0.045;                                     // extinction per metre at full density
-              float Tl = max(exp(-od * sig * 0.6), exp(-od * sig * 0.15) * 0.6);   // 2nd lobe ≈ multiple scattering
+              float Tl = max(exp(-od * sig * 0.6), exp(-od * sig * 0.12) * 0.78);  // 2nd lobe ≈ multiple scattering: bright white bodies
               float powder = 1.0 - exp(-d * stepL * sig * 2.0);
               vec3 amb = mix(uAmbBot, uAmbTop, clamp((p.y - CB) / (CT - CB), 0.0, 1.0));
-              vec3 S = uLightCol * Tl * ph * mix(0.6, 1.0, powder) + amb;
+              vec3 S = uLightCol * Tl * ph * mix(0.8, 1.0, powder) + amb;
               float a = exp(-d * sig * stepL);
               L += T * S * (1.0 - a);
               T *= a;
@@ -1271,7 +1271,7 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
             }
             t += stepL;
           }
-          col = mix(sky, sky * T + L, exp(-t0 / 22000.0));                // distant clouds melt into the haze
+          col = mix(sky, sky * T + L, exp(-t0 / 40000.0));                // distant clouds melt into the haze
         }
       }
       col = mix(uFog, col, smoothstep(0.0, 0.035, rd.y));               // sky meets the land's haze without a seam
@@ -1328,10 +1328,10 @@ function renderSky() {
     skyU.uWind.value.set(cloud.x, cloud.z, cloud.evolve);
   }
   cloud.last = simTime;
-  skyU.uCoverage.value = 0.3 + 0.06 * wind.gust + 0.25 * smoothstep(4, 6.5, wind.speed);   // stormier wind, fuller sky
+  skyU.uCoverage.value = 0.22 + 0.04 * wind.gust + 0.3 * smoothstep(4, 6.5, wind.speed);   // ~1/5 of the sky; storms fill it   // stormier wind, fuller sky
   skyU.uInvProj.value.copy(camera.projectionMatrixInverse); skyU.uCamWorld.value.copy(camera.matrixWorld);
   renderer.getDrawingBufferSize(_sizeV);
-  const w = Math.max(1, Math.ceil(_sizeV.x / 3)), h = Math.max(1, Math.ceil(_sizeV.y / 3));
+  const w = Math.max(1, Math.ceil(_sizeV.x / 2)), h = Math.max(1, Math.ceil(_sizeV.y / 2));   // half resolution: crisp cloud edges
   if (skyRT.width !== w || skyRT.height !== h) { skyRT.setSize(w, h); sky.material.uniforms.uTexel.value.set(1 / w, 1 / h); }
   renderer.setRenderTarget(skyRT); renderer.render(skyScene, camera); renderer.setRenderTarget(null);
 }
