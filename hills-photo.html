@@ -1,0 +1,1079 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0d1a08" />
+<title>Wildflower Hills Photo</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0d1a08;
+    --fg: #ffffff;
+    --fg-dim: rgba(255, 255, 255, 0.74);
+    --ease-liquid: cubic-bezier(0.2, 0.9, 0.25, 1.15);
+    --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --radius: 28px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--fg);
+    font: 14px/1.35 system-ui, -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif; touch-action: none; }
+  canvas { display: block; position: fixed; inset: 0; width: 100vw; height: 100dvh; }
+  button, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  #status { position: fixed; left: 50%; top: calc(16px + env(safe-area-inset-top)); transform: translateX(-50%);
+    padding: 8px 14px; border-radius: 999px; background: rgba(12, 20, 10, 0.55); white-space: nowrap;
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); transition: opacity 0.6s; }
+  #status.hidden { opacity: 0; pointer-events: none; }
+
+  /* ---------- Liquid glass ------------------------------------------------ */
+  .glass {
+    position: relative; isolation: isolate;
+    background:
+      linear-gradient(165deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.06) 42%, rgba(255, 255, 255, 0.12)),
+      rgba(14, 24, 10, 0.26);
+    -webkit-backdrop-filter: blur(22px) saturate(185%);
+    backdrop-filter: blur(22px) saturate(185%);
+    box-shadow:
+      inset 0 1px 1px rgba(255, 255, 255, 0.7),
+      inset 0 -1px 1px rgba(255, 255, 255, 0.16),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+      0 20px 50px -14px rgba(0, 0, 0, 0.5);
+  }
+  /* Chromium can refract the backdrop through an SVG displacement map → real "liquid" lensing. */
+  .refract .glass { backdrop-filter: url(#liquid) blur(18px) saturate(185%); }
+  .glass::before { /* specular sheen along the top-left rim */
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: -1;
+    background: radial-gradient(120% 60% at 18% 0%, rgba(255, 255, 255, 0.35), transparent 55%);
+    mix-blend-mode: screen;
+  }
+
+  #dock { position: fixed; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    width: min(440px, calc(100vw - max(16px, env(safe-area-inset-left, 0px)) - max(16px, env(safe-area-inset-right, 0px))));
+    border-radius: var(--radius); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    transition: border-radius 0.4s var(--ease-out); }
+  body.no-ui #dock { display: none; }
+
+  .barRow { display: flex; align-items: center; padding-right: 8px; }
+  .iconbtn { all: unset; flex: none; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; cursor: pointer;
+    transition: background 0.2s; }
+  .iconbtn:hover { background: rgba(255, 255, 255, 0.12); }
+  .iconbtn .on, .iconbtn[aria-pressed="true"] .off { display: none; }
+  .iconbtn[aria-pressed="true"] .on { display: inline; }
+  #dockBar { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
+    min-height: 56px; padding: 8px 10px 8px 16px; cursor: pointer; border-radius: var(--radius); }
+  #dockBar .chip { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; min-width: 0; }
+  #dockBar .chip b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  #dockBar .chip .muted, #barWind { overflow: hidden; text-overflow: ellipsis; }
+  @media (max-width: 430px) { #barTod { display: none; } }
+  .credits { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 12px; color: var(--fg-dim); }   /* the name still shows in the panel header */
+  #dockBar .sep { width: 1px; height: 18px; background: rgba(255, 255, 255, 0.3); }
+  #dockBar .grow { flex: 1; }
+  #dockBar .chev { width: 44px; height: 40px; display: grid; place-items: center; border-radius: 50%;
+    transition: transform 0.4s var(--ease-liquid); }
+  #dock[data-open="true"] .chev { transform: rotate(180deg); }
+  .muted { color: var(--fg-dim); }
+  svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  #dockBody { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.45s var(--ease-out); }
+  #dock[data-open="true"] #dockBody { grid-template-rows: 1fr; }
+  #dockBody > div { overflow: hidden; min-height: 0; }
+  .sections { padding: 2px 16px 16px; display: grid; gap: 16px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row.between { justify-content: space-between; }
+  .label { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-dim); }
+
+  /* Time slider: the track is the sky over 24 h, the thumb is the sun/moon. */
+  .sky { -webkit-appearance: none; appearance: none; width: 100%; height: 44px; background: transparent; margin: 0; cursor: pointer; }
+  .sky::-webkit-slider-runnable-track { height: 10px; border-radius: 99px;
+    background: linear-gradient(90deg, #0e1730 0%, #26345e 20%, #e79a73 25%, #f5c48a 30%, #a9c8ee 37%, #c4dcf8 55%, #b8d0ee 68%, #ffc47a 74%, #f08a54 79%, #5a5884 83%, #1a2548 88%, #0e1730 100%);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35); }
+  .sky::-moz-range-track { height: 10px; border-radius: 99px;
+    background: linear-gradient(90deg, #0e1730 0%, #26345e 20%, #e79a73 25%, #f5c48a 30%, #a9c8ee 37%, #c4dcf8 55%, #b8d0ee 68%, #ffc47a 74%, #f08a54 79%, #5a5884 83%, #1a2548 88%, #0e1730 100%); }
+  .sky::-webkit-slider-thumb { -webkit-appearance: none; width: 26px; height: 26px; margin-top: -8px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #fff, var(--sun, #ffd27a) 60%); border: 2px solid rgba(255, 255, 255, 0.9);
+    box-shadow: 0 0 18px 4px var(--sun-glow, rgba(255, 200, 120, 0.7)); }
+  .sky::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff;
+    background: var(--sun, #ffd27a); box-shadow: 0 0 18px 4px var(--sun-glow, rgba(255, 200, 120, 0.7)); }
+
+  /* Segmented control with a sliding liquid indicator. */
+  .seg { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 3px;
+    border-radius: 999px; background: rgba(0, 0, 0, 0.18); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25); flex: 1; }
+  .seg button { all: unset; position: relative; z-index: 1; text-align: center; min-height: 38px; line-height: 38px;
+    border-radius: 999px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--fg-dim); transition: color 0.25s; }
+  .seg button[aria-checked="true"] { color: #fff; }
+  .seg button:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
+  .seg .pill { position: absolute; z-index: 0; top: 3px; bottom: 3px; left: 3px; border-radius: 999px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.18));
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.8), 0 4px 12px rgba(0, 0, 0, 0.2);
+    transition: transform 0.45s var(--ease-liquid), width 0.45s var(--ease-liquid); }
+
+  /* Wind direction dial */
+  .dial { position: relative; width: 48px; height: 48px; flex: none; border-radius: 50%; cursor: grab; touch-action: none;
+    background: radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.08));
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.7), inset 0 0 0 1px rgba(255, 255, 255, 0.25); }
+  .dial svg { position: absolute; inset: 0; width: 100%; height: 100%; transition: transform 0.12s linear; }
+
+  .toggle { all: unset; display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px;
+    border-radius: 999px; cursor: pointer; font-size: 13px; font-weight: 600; background: rgba(0, 0, 0, 0.18); }
+  .toggle .dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.4); transition: background 0.25s, box-shadow 0.25s; }
+  .toggle[aria-checked="true"] .dot { background: #8ff07a; box-shadow: 0 0 8px #8ff07a; }
+  .linkbtn { all: unset; cursor: pointer; font-size: 13px; color: var(--fg-dim); min-height: 36px; padding: 0 4px; }
+  .linkbtn:hover { color: #fff; }
+
+  .fine { display: grid; gap: 2px; }
+  .fine[hidden] { display: none; }
+  .fine label { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 8px; font-size: 13px; }
+  .fine output { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-dim); }
+  .mini { -webkit-appearance: none; appearance: none; width: 100%; height: 36px; background: transparent; margin: 0; }
+  .mini::-webkit-slider-runnable-track { height: 4px; border-radius: 99px; background: rgba(255, 255, 255, 0.35); }
+  .mini::-moz-range-track { height: 4px; border-radius: 99px; background: rgba(255, 255, 255, 0.35); }
+  .mini::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; margin-top: -8px; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
+  .mini::-moz-range-thumb { width: 18px; height: 18px; border: 0; border-radius: 50%; background: #fff; }
+
+  .btn { all: unset; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px;
+    padding: 0 18px; border-radius: 999px; cursor: pointer; font-weight: 600; font-size: 14px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.16));
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.85), 0 6px 16px -6px rgba(0, 0, 0, 0.4);
+    transition: transform 0.15s var(--ease-out), opacity 0.2s; }
+  .btn:active { transform: scale(0.96); }
+  .btn[disabled] { opacity: 0.45; pointer-events: none; }
+  .progress { position: relative; height: 44px; flex: 1; border-radius: 999px; overflow: hidden; background: rgba(0, 0, 0, 0.2);
+    display: none; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; }
+  .progress i { position: absolute; inset: 0; transform-origin: left; transform: scaleX(0);
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.45)); transition: transform 0.2s linear; }
+  .progress span { position: relative; }
+  .exporting .progress { display: flex; }
+  .exporting .export-actions { display: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before { transition-duration: 0.01ms !important; }
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="liquid" x="0" y="0" width="100%" height="100%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.009 0.012" numOctaves="2" seed="3" result="n" />
+    <feGaussianBlur in="n" stdDeviation="2" result="nb" />
+    <feDisplacementMap in="SourceGraphic" in2="nb" scale="38" xChannelSelector="R" yChannelSelector="G" />
+  </filter>
+</svg>
+
+<div id="status">Growing meadow…</div>
+
+<div id="dock" class="glass" data-open="false">
+  <div class="barRow">
+  <button id="dockBar" aria-expanded="false" aria-controls="dockBody" aria-label="Show meadow controls">
+    <span class="chip">
+      <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <b id="barTime">--:--</b><span class="muted" id="barTod"></span>
+    </span>
+    <span class="sep" aria-hidden="true"></span>
+    <span class="chip">
+      <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h10a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/></svg>
+      <span id="barWind">Breeze</span>
+    </span>
+    <span class="grow"></span>
+    <span class="chev"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></span>
+  </button>
+  <button class="iconbtn" id="soundBtn" aria-pressed="false" aria-label="Sound">
+    <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path class="on" d="M15.5 9a4.5 4.5 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11"/><path class="off" d="M16 9.5l5 5M21 9.5l-5 5"/></svg>
+  </button>
+  </div>
+
+  <div id="dockBody"><div><div class="sections">
+    <section aria-label="Time of day">
+      <div class="row between">
+        <span class="label">Time of day · <span id="panelTod"></span></span>
+        <button class="toggle" id="liveToggle" role="switch" aria-checked="true" title="Follow this device's clock">
+          <span class="dot" aria-hidden="true"></span>Live
+        </button>
+      </div>
+      <input class="sky" id="timeSlider" type="range" min="0" max="24" step="0.05" value="17.8" aria-label="Time of day" />
+    </section>
+
+    <section aria-label="Wind">
+      <div class="row between" style="margin-bottom:8px">
+        <span class="label">Wind</span>
+        <button class="linkbtn" id="fineToggle" aria-expanded="false" aria-controls="fine">Fine-tune</button>
+      </div>
+      <div class="row">
+        <div class="seg" id="windSeg" role="radiogroup" aria-label="Wind preset">
+          <span class="pill" aria-hidden="true"></span>
+          <button role="radio" data-v="calm">Calm</button>
+          <button role="radio" data-v="breeze">Breeze</button>
+          <button role="radio" data-v="gusty">Gusty</button>
+          <button role="radio" data-v="storm">Storm</button>
+        </div>
+        <div class="dial" id="dial" role="slider" tabindex="0" aria-label="Wind direction" aria-valuemin="0" aria-valuemax="359" aria-valuenow="15">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M13 24h20m-6-6 6 6-6 6" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+      </div>
+      <div class="fine" id="fine" hidden>
+        <label>Strength <input class="mini" id="fStrength" type="range" min="0" max="9" step="0.1" /><output></output></label>
+        <label>Gusts <input class="mini" id="fGust" type="range" min="0" max="1" step="0.01" /><output></output></label>
+        <label>Turbulence <input class="mini" id="fTurb" type="range" min="0" max="1" step="0.01" /><output></output></label>
+      </div>
+    </section>
+
+    <section aria-label="Export loop" id="exportSec">
+      <div class="row between" style="margin-bottom:8px">
+        <span class="label">Export loop</span>
+        <span class="muted" id="exportNote" style="font-size:12px">Seamless</span>
+      </div>
+      <div class="row">
+        <div class="seg" id="lenSeg" role="radiogroup" aria-label="Loop length" style="flex:0 0 132px">
+          <span class="pill" aria-hidden="true"></span>
+          <button role="radio" data-v="6">6s</button>
+          <button role="radio" data-v="10">10s</button>
+        </div>
+        <div class="row export-actions" style="flex:1;justify-content:flex-end">
+          <button class="btn" id="mp4Btn">MP4</button>
+          <button class="btn" id="gifBtn">GIF</button>
+        </div>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="progress"><i></i><span id="progressText">Preparing…</span></div>
+      </div>
+      <div class="row" id="saveRow" hidden style="margin-top:10px">
+        <button class="btn" id="saveBtn" style="flex:1">Save</button>
+      </div>
+    </section>
+    <button class="linkbtn" id="creditsToggle" aria-expanded="false" aria-controls="credits" style="font-size:12px;justify-self:start">Sound credits</button>
+    <ul class="credits" id="credits" hidden></ul>
+  </div></div></div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.171.0/build/three.module.min.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ========================================================================== */
+/*  Config                                                                    */
+/* ========================================================================== */
+const params = new URLSearchParams(location.search);
+const num = (k, d) => (params.has(k) ? parseFloat(params.get(k)) : d);
+const CAPTURE = params.get('capture') === '1';
+const SEED = 7;
+const PHOTO = { src: 'photo/hills.jpg', depth: 'photo/hills_depth.png', w: 736, h: 1302 };
+const FRAME = { w: num('w', PHOTO.w), h: num('h', PHOTO.h) };
+const LIVE_LOOP = 60;
+if (params.get('ui') === '0' || CAPTURE) document.body.classList.add('no-ui');
+
+const statusEl = document.getElementById('status');
+const setStatus = (msg, hideAfter = 0) => {
+  statusEl.textContent = msg;
+  statusEl.classList.remove('hidden');
+  if (hideAfter) setTimeout(() => statusEl.classList.add('hidden'), hideAfter);
+};
+if (CAPTURE) statusEl.style.display = 'none';
+
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+let rand = mulberry32(SEED);
+const range = (a, b) => a + (b - a) * rand();
+const pick = (r) => range(r[0], r[1]);
+const gauss = () => Math.sqrt(-2 * Math.log(rand() || 1e-9)) * Math.cos(2 * Math.PI * rand());
+
+const perm = new Uint8Array(512);
+{
+  const p = Array.from({ length: 256 }, (_, i) => i);
+  for (let i = 255; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [p[i], p[j]] = [p[j], p[i]]; }
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+}
+const GRAD = [[1, 1], [-1, 1], [1, -1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]];
+const F2 = 0.5 * (Math.sqrt(3) - 1), G2 = (3 - Math.sqrt(3)) / 6;
+function noise2(x, y) {
+  const s = (x + y) * F2, i = Math.floor(x + s), j = Math.floor(y + s);
+  const t = (i + j) * G2, x0 = x - (i - t), y0 = y - (j - t);
+  const i1 = x0 > y0 ? 1 : 0, j1 = 1 - i1;
+  const x1 = x0 - i1 + G2, y1 = y0 - j1 + G2, x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
+  const ii = i & 255, jj = j & 255;
+  let n = 0, c;
+  if ((c = 0.5 - x0 * x0 - y0 * y0) > 0) { const g = GRAD[perm[ii + perm[jj]] & 7]; c *= c; n += c * c * (g[0] * x0 + g[1] * y0); }
+  if ((c = 0.5 - x1 * x1 - y1 * y1) > 0) { const g = GRAD[perm[ii + i1 + perm[jj + j1]] & 7]; c *= c; n += c * c * (g[0] * x1 + g[1] * y1); }
+  if ((c = 0.5 - x2 * x2 - y2 * y2) > 0) { const g = GRAD[perm[ii + 1 + perm[jj + 1]] & 7]; c *= c; n += c * c * (g[0] * x2 + g[1] * y2); }
+  return 70 * n;
+}
+function fbm2(x, y, oct = 3) {
+  let v = 0, a = 0.5;
+  for (let o = 0; o < oct; o++) { v += a * noise2(x, y); x = x * 2.03 + 17.1; y = y * 2.03 - 9.7; a *= 0.5; }
+  return v;
+}
+const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+
+
+/* ========================================================================== */
+/*  Wind + shared state                                                       */
+/* ========================================================================== */
+const WIND_PRESETS = {
+  calm:   { speed: 0.8, gust: 0.35, turb: 0.3 },
+  breeze: { speed: 2.4, gust: 0.6, turb: 0.45 },
+  gusty:  { speed: 3.4, gust: 1.0, turb: 0.7 },
+  storm:  { speed: 6.5, gust: 1.0, turb: 1.0 },
+};
+const wind = { ...WIND_PRESETS.breeze, preset: 'breeze', dirDeg: 15, dir: new THREE.Vector2() };
+const setWindDir = (deg) => { wind.dirDeg = ((deg % 360) + 360) % 360; wind.dir.set(Math.cos(wind.dirDeg * Math.PI / 180), Math.sin(wind.dirDeg * Math.PI / 180)); };
+setWindDir(wind.dirDeg);
+const applyWindPreset = (name) => Object.assign(wind, WIND_PRESETS[name], { preset: name });
+const computeShelter = () => {};                       // (3D page only)
+if (params.has('wind') && WIND_PRESETS[params.get('wind')]) applyWindPreset(params.get('wind'));
+
+const state = { live: !params.has('time') && !CAPTURE, hour: num('time', 18.3), exporting: false };
+const clockHour = () => { const d = new Date(); return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600; };
+const TOD_NAMES = [[4.8, 'Night'], [5.8, 'Blue hour'], [7.0, 'Sunrise'], [11, 'Morning'], [15, 'Midday'], [17.2, 'Afternoon'],
+  [19.0, 'Golden hour'], [19.8, 'Sunset'], [20.6, 'Dusk'], [24, 'Night']];
+const todName = (h) => TOD_NAMES.find(([end]) => h < end)?.[1] ?? 'Night';
+const fmtTime = (h) => `${String(Math.floor(h) % 24).padStart(2, '0')}:${String(Math.floor((h % 1) * 60)).padStart(2, '0')}`;
+
+// Gust/lull cycle, shared by picture and sound: a travelling envelope env(t − along/front), built from
+// whole-cycle sines so it repeats exactly every LOOP seconds (seamless exports) with ~4–7 s gusts.
+let LOOP = LIVE_LOOP;
+const gustHarmonics = () => [Math.max(1, Math.round(LOOP / 5)), Math.max(1, Math.round(LOOP / 7)), Math.max(1, Math.round(LOOP / 3.4))];
+const gustFront = () => 1.0 + 0.55 * wind.speed;
+function gustEnv(tau) {
+  const [a, b, c] = gustHarmonics(), w = (2 * Math.PI) / LOOP;
+  return 0.5 + 0.5 * (0.55 * Math.sin(a * w * tau + 1.3) + 0.3 * Math.sin(b * w * tau + 4.1) + 0.15 * Math.sin(c * w * tau + 2.2));
+}
+let simTime = 0, lastWindTick = NaN;
+const setLoop = (s) => { LOOP = s; };
+const advanceTo = (t) => { simTime = t; };
+const advanceAsync = async (t, onProgress) => { simTime = t; onProgress?.(1); };
+
+// Sound follows the same gusts: left/right "blade speed" from the envelope at the near meadow on each side.
+function soundState() {
+  const s = clamp(wind.speed / 6.5, 0, 1), base = 0.01 + 0.06 * s + 0.5 * s * s;
+  const at = (x) => base * (0.35 + 1.3 * wind.gust * gustEnv(simTime - (x * wind.dir.x + 1.0 * wind.dir.y) / gustFront()) + (1 - wind.gust) * 0.65);
+  return { wind: s, left: at(-0.5), right: at(0.5), hour: state.hour };
+}
+
+/* ========================================================================== */
+/*  Photo + depth → motion map                                                */
+/* ========================================================================== */
+function blur(src, w, h, r) {
+  const tmp = new Float32Array(src.length), out = new Float32Array(src.length), n = 2 * r + 1;
+  for (let y = 0; y < h; y++) {
+    let acc = 0; const row = y * w;
+    for (let k = -r; k <= r; k++) acc += src[row + clamp(k, 0, w - 1)];
+    for (let x = 0; x < w; x++) { tmp[row + x] = acc / n; acc += src[row + Math.min(w - 1, x + r + 1)] - src[row + Math.max(0, x - r)]; }
+  }
+  for (let x = 0; x < w; x++) {
+    let acc = 0;
+    for (let k = -r; k <= r; k++) acc += tmp[clamp(k, 0, h - 1) * w + x];
+    for (let y = 0; y < h; y++) { out[y * w + x] = acc / n; acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x]; }
+  }
+  return out;
+}
+const loadImage = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+
+// R = disparity (near = 1), G = "sticks out" (stems, tips, flower heads — roots and ground stay still),
+// B = flower heads (by colour), all smoothed so the displacement field bends instead of tearing.
+async function buildMotionMap() {
+  // Depth ships losslessly as a PNG: 16-bit disparity split into R (high byte) and G (low byte).
+  const [depthPng, img] = await Promise.all([
+    fetch(PHOTO.depth).then((r) => r.blob()).then((b) => createImageBitmap(b, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' })),
+    loadImage(PHOTO.src),
+  ]);
+  const dc = Object.assign(document.createElement('canvas'), { width: PHOTO.w, height: PHOTO.h }).getContext('2d', { willReadFrequently: true });
+  dc.drawImage(depthPng, 0, 0);
+  const dp = dc.getImageData(0, 0, PHOTO.w, PHOTO.h).data, full = new Uint16Array(PHOTO.w * PHOTO.h);
+  for (let i = 0; i < full.length; i++) full[i] = dp[i * 4] * 256 + dp[i * 4 + 1];
+  const W = PHOTO.w / 2, H = Math.round(PHOTO.h / 2), d = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = Math.min(PHOTO.h - 1, y * 2) * PHOTO.w + x * 2;
+    d[y * W + x] = (full[i] + full[i + 1] + full[i + PHOTO.w] + full[i + PHOTO.w + 1]) / (4 * 65535);
+  }
+  const ctx = Object.assign(document.createElement('canvas'), { width: W, height: H }).getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, W, H);
+  const px = ctx.getImageData(0, 0, W, H).data;
+  const local = blur(d, W, H, 7), relief = new Float32Array(W * H), flower = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    relief[i] = clamp((d[i] - local[i]) * 14 + 0.15, 0, 1);
+    const r = px[i * 4] / 255, g = px[i * 4 + 1] / 255, b = px[i * 4 + 2] / 255;
+    flower[i] = smoothstep(0.02, -0.06, g - Math.max(r, b)) * smoothstep(0.3, 0.55, (r + g + b) / 3);
+  }
+  const rel = blur(relief, W, H, 2), flw = blur(flower, W, H, 2), data = new Uint8Array(W * H * 4);
+  for (let i = 0; i < W * H; i++) {
+    data[i * 4] = d[i] * 255; data[i * 4 + 1] = Math.min(1, rel[i] * 1.2) * 255; data[i * 4 + 2] = Math.min(1, flw[i] * 2) * 255; data[i * 4 + 3] = 255;
+  }
+  const tex = new THREE.DataTexture(data, W, H);
+  tex.flipY = true; tex.minFilter = tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
+  return tex;
+}
+
+/* ========================================================================== */
+/*  Rendering                                                                 */
+/* ========================================================================== */
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', preserveDrawingBuffer: CAPTURE });
+let DPR = CAPTURE ? 1 : Math.min(window.devicePixelRatio, 1.5);
+renderer.setPixelRatio(DPR);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+camera.aspect = PHOTO.w / PHOTO.h;                     // export framing = the photo's own shape
+
+const u = {
+  uPhoto: { value: null }, uMotion: { value: null },
+  uImgAspect: { value: PHOTO.w / PHOTO.h }, uViewAspect: { value: 1 },
+  uT: { value: 0 }, uLoop: { value: new THREE.Vector4(12, 9, 18, 60) },
+  uWind: { value: new THREE.Vector4() },               // dir.x, dir.y, speed, gustiness
+  uFront: { value: 2 }, uTurb: { value: 0.5 },
+  uExposure: { value: 1 }, uTint: { value: new THREE.Vector3(1, 1, 1) }, uSat: { value: 1 },
+  uDrift: { value: new THREE.Vector2() },
+  uOsc: { value: new THREE.Vector2(78, 48) },          // whole swing cycles per loop
+};
+scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+  uniforms: u,
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: /* glsl */ `
+    uniform sampler2D uPhoto, uMotion;
+    uniform float uImgAspect, uViewAspect, uT, uFront, uTurb, uExposure, uSat;
+    uniform vec4 uLoop, uWind; uniform vec3 uTint; uniform vec2 uDrift, uOsc;
+    varying vec2 vUv;
+    vec3 permute3(vec3 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
+float snoise(vec2 v) {
+  const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+  vec2 i  = floor(v + dot(v, C.yy));
+  vec2 x0 = v - i + dot(i, C.xx);
+  vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+  vec4 x12 = x0.xyxy + C.xxzz;
+  x12.xy -= i1;
+  i = mod(i, 289.0);
+  vec3 p = permute3(permute3(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));
+  vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);
+  m = m * m; m = m * m;
+  vec3 x = 2.0 * fract(p * C.www) - 1.0;
+  vec3 h = abs(x) - 0.5;
+  vec3 ox = floor(x + 0.5);
+  vec3 a0 = x - ox;
+  m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+  vec3 g;
+  g.x  = a0.x * x0.x + h.x * x0.y;
+  g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+  return 130.0 * dot(m, g);
+}
+    float gustEnv(float tau) {
+      float w = 6.2831853 / uLoop.w;
+      return 0.5 + 0.5 * (0.55 * sin(uLoop.x * w * tau + 1.3) + 0.3 * sin(uLoop.y * w * tau + 4.1) + 0.15 * sin(uLoop.z * w * tau + 2.2));
+    }
+    // Small-scale gusts + leaf flutter in ground coordinates, blended across the loop so it repeats exactly.
+    vec2 detail(vec2 P, float along, float t) {
+      float g = snoise(vec2((along - uFront * t) * 0.35, dot(P, vec2(-uWind.y, uWind.x)) * 0.15));
+      vec2 fl = vec2(snoise(P * 6.0 + vec2(t * 2.1, -t * 1.7)), snoise(P * 6.0 + vec2(-t * 1.9, t * 2.3) + 17.0));
+      return vec2(g, 0.0) + fl * 0.35 * uTurb;
+    }
+    void main() {
+      float r = uViewAspect / uImgAspect;
+      vec2 uv = (vUv - 0.5) * (r > 1.0 ? vec2(1.0, 1.0 / r) : vec2(r, 1.0)) * 0.96 + 0.5;
+      vec4 m = texture2D(uMotion, uv);
+      float d = m.r, stick = m.g, flower = m.b;
+      // Disparity → distance (≈0.6 m at the bottom, ~150 m on the far hills) → position on the ground.
+      float Z = 1.0 / mix(1.0 / 150.0, 1.0 / 0.6, d * d);
+      vec2 P = vec2((uv.x - 0.5) * Z * 1.2, Z);
+      float along = dot(P, uWind.xy);
+      float surge = mix(0.65, gustEnv(uT - along / uFront), uWind.w);
+      float k = uT / uLoop.w;
+      vec2 det = (detail(P, along, uT) * (1.0 - k) + detail(P, along, uT - uLoop.w) * k) / length(vec2(1.0 - k, k));
+      float s = clamp(uWind.z / 6.5, 0.0, 1.0);
+      // Sway in metres, then perspective: screen motion shrinks with distance (≈0.87 image-heights per metre at 1 m).
+      // Back-and-forth swing (~1.3 Hz for grass, ~0.8 Hz for heavier flower heads), each stem on its own phase.
+      float ph = 6.2831853 * snoise(P * 2.5 + 3.7), w = 6.2831853 / uLoop.w;
+      float osc = mix(sin(uOsc.x * w * uT + ph), sin(uOsc.y * w * uT + ph), flower);
+      float A = (0.009 + 0.026 * s + 0.15 * s * s) * (0.35 + 1.3 * surge) * (1.0 + 0.5 * det.x) * (0.55 + 0.75 * osc);
+      vec2 dir = normalize(vec2(uWind.x, 0.35 * uWind.y) + 1e-4);
+      vec2 sway = (dir * A + vec2(det.y, 0.0) * 0.006 * (0.3 + surge)) * (0.87 / Z);
+      sway.y -= length(sway) * 0.3;                    // tips dip a little as they bend
+      float weight = pow(stick, 1.3) * (1.0 + 0.8 * flower);   // roots and ground stay put, heads swing most
+      vec2 disp = clamp(sway * weight, vec2(-0.03), vec2(0.03));
+      vec2 parallax = uDrift * max(d - 0.12, 0.0);      // slow handheld drift: far hills stay put, nearer layers shift
+      vec3 col = texture2D(uPhoto, uv - disp - parallax).rgb;
+      // Far hills: gusts show as brighter waves rolling over the grass.
+      col *= 1.0 + 0.16 * smoothstep(0.55, 0.95, surge) * smoothstep(6.0, 30.0, Z) * s * 1.6;
+      col *= uExposure * uTint;
+      float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      gl_FragColor = vec4(mix(vec3(lum), col, uSat), 1.0);
+      #include <colorspace_fragment>
+    }`,
+})));
+
+// Time of day as a grade of the photo (it was taken at golden hour, which stays untouched).
+const GRADE = [
+  [0, 0.3, [0.55, 0.65, 1.0], 0.45], [5, 0.45, [0.75, 0.75, 1.0], 0.6], [6.3, 0.8, [1.08, 0.92, 0.85], 0.9],
+  [8, 0.95, [1.02, 1.0, 0.96], 1.0], [13, 1.05, [0.98, 1.0, 1.03], 1.0], [17, 1.0, [1.04, 1.0, 0.93], 1.05],
+  [18.3, 1.0, [1, 1, 1], 1.0], [19.5, 0.75, [1.1, 0.85, 0.8], 0.95], [20.5, 0.45, [0.7, 0.72, 1.0], 0.6], [24, 0.3, [0.55, 0.65, 1.0], 0.45],
+];
+const sun = { color: new THREE.Color('#ffd27a') };
+function applyTimeOfDay(h) {
+  h = ((h % 24) + 24) % 24;
+  let i = 0; while (i < GRADE.length - 2 && GRADE[i + 1][0] <= h) i++;
+  const [h0, e0, t0, s0] = GRADE[i], [h1, e1, t1, s1] = GRADE[i + 1], k = smoothstep(0, 1, (h - h0) / (h1 - h0));
+  u.uExposure.value = e0 + (e1 - e0) * k;
+  u.uTint.value.set(...t0.map((v, j) => v + (t1[j] - v) * k));
+  u.uSat.value = s0 + (s1 - s0) * k;
+  sun.color.setRGB(...u.uTint.value.toArray().map((v) => Math.min(1, v * 0.9)));
+}
+
+function syncGPU() {
+  const t = ((simTime % LOOP) + LOOP) % LOOP;
+  u.uT.value = t;
+  u.uLoop.value.set(...gustHarmonics(), LOOP);
+  u.uWind.value.set(wind.dir.x, wind.dir.y, wind.speed, wind.gust);
+  u.uFront.value = gustFront(); u.uTurb.value = wind.turb;
+  u.uOsc.value.set(Math.max(1, Math.round(1.3 * LOOP)), Math.max(1, Math.round(0.8 * LOOP)));
+  const ph = (2 * Math.PI * t) / LOOP;
+  u.uDrift.value.set(Math.sin(ph) * 0.003, Math.cos(ph) * 0.0012);
+  const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+  u.uViewAspect.value = size.x / size.y;
+}
+
+// How much of each ambience is present at a given hour (0..1).
+function ambienceMix(h) {
+  const band = (a, b, c, d) => smoothstep(a, b, h) * (1 - smoothstep(c, d, h));
+  return {
+    dawn: band(4.6, 5.6, 8.0, 9.5),
+    day: band(7.5, 9.0, 17.5, 19.0),
+    insects: band(9.5, 11.5, 18.0, 19.8),
+    evening: band(17.0, 18.0, 20.0, 21.0),
+    night: Math.max(1 - smoothstep(4.6, 5.8, h), smoothstep(19.8, 21.0, h)),
+  };
+}
+
+// Field recordings (see audio/CREDITS.md). Each is trimmed, de-rumbled and normalised to −23 LUFS.
+const SOUND_FILES = ['grass_gentle', 'grass_reeds', 'grass_strong', 'meadow_day', 'dawn_chorus', 'skylark', 'blackbird_evening', 'crickets_night'];
+const AMBIENCE_URL = params.get('ambience');            // optional extra loop of your own: ?ambience=file.mp3
+const soundBytes = new Map();                           // fetched once, decoded per audio context
+async function loadSoundBank(ctx) {
+  const urls = SOUND_FILES.map((n) => [n, `audio/${n}.mp3`]);
+  if (AMBIENCE_URL) urls.push(['custom', AMBIENCE_URL]);
+  const bank = {};
+  await Promise.all(urls.map(async ([name, url]) => {
+    try {
+      if (!soundBytes.has(name)) soundBytes.set(name, await fetch(url).then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); }));
+      bank[name] = await ctx.decodeAudioData(soundBytes.get(name).slice(0));
+    } catch (e) { console.warn(`sound "${name}" unavailable`, e); }
+  }));
+  return bank;
+}
+
+// Equal-power fade curves for seamless joins between recording windows.
+const FADE_IN = Float32Array.from({ length: 64 }, (_, i) => Math.sin((i / 63) * Math.PI / 2));
+const FADE_OUT = Float32Array.from(FADE_IN).reverse();
+
+/**
+ * Builds the soundscape on any BaseAudioContext (live AudioContext or OfflineAudioContext).
+ *   update(state, time, tc) — layer volumes follow the simulation (tc = smoothing in s; 0 = jump)
+ *   fill(until)             — keeps every recording playing up to `until` (random windows, cross-faded)
+ */
+function createSoundscape(ctx, seed, bank) {
+  const rnd = mulberry32(seed);
+  const master = ctx.createGain();
+  master.gain.value = 0;
+  const comp = ctx.createDynamicsCompressor();
+  Object.entries({ threshold: -14, knee: 10, ratio: 2.5, attack: 0.02, release: 0.4 }).forEach(([k, v]) => { comp[k].value = v; });
+  master.connect(comp).connect(ctx.destination);
+
+  // A recording played as an endless chain of random windows with 3 s equal-power cross-fades:
+  // it never audibly repeats and never clicks.
+  const players = [];
+  function track(buffer, pan) {
+    const gain = ctx.createGain(); gain.gain.value = 0;
+    const p = ctx.createStereoPanner(); p.pan.value = pan;
+    gain.connect(p).connect(master);
+    if (buffer) players.push({ buffer, out: gain, next: 0 });
+    return gain;
+  }
+  function fillPlayer(pl, until) {
+    const fade = 3, seg = Math.min(18, pl.buffer.duration - 0.5);
+    while (pl.next < until) {
+      const src = ctx.createBufferSource(); src.buffer = pl.buffer;
+      const g = ctx.createGain(); g.gain.value = 0;
+      src.connect(g).connect(pl.out);
+      const start = Math.max(pl.next, ctx.currentTime), offset = 0.2 + rnd() * (pl.buffer.duration - seg - 0.4);
+      g.gain.setValueCurveAtTime(FADE_IN, start, fade);
+      g.gain.setValueCurveAtTime(FADE_OUT, start + seg - fade, fade);
+      src.start(start, offset, seg);
+      pl.next = start + seg - fade;
+    }
+  }
+
+  // Grass layers come in left/right pairs so gusts sweep across the stereo field with the picture.
+  const pair = (name) => [track(bank[name], -0.55), track(bank[name], 0.55)];
+  const gentle = pair('grass_gentle'), reeds = pair('grass_reeds'), strong = pair('grass_strong');
+  const meadow = track(bank.meadow_day, 0), dawn = track(bank.dawn_chorus, 0), lark = track(bank.skylark, 0.2);
+  const blackbird = track(bank.blackbird_evening, -0.25), crickets = track(bank.crickets_night, 0);
+  const custom = track(bank.custom, 0);
+
+  const set = (param, v, t, tc) => (tc > 0 ? param.setTargetAtTime(v, t, tc) : param.setValueAtTime(v, t));
+
+  function update(st, t, tc = 0.3) {
+    const mix = ambienceMix(st.hour), w = st.wind;
+    // Blade-tip speed → 0..1 per side (≈0.03 calm, 0.2 breeze, 0.45 gusty, 0.9 storm).
+    const sides = [clamp(st.left / 0.5, 0, 1), clamp(st.right / 0.5, 0, 1)];
+    sides.forEach((m, k) => {
+      set(gentle[k].gain, 0.22 + 0.55 * smoothstep(0.0, 0.3, m) * (1 - 0.4 * smoothstep(0.55, 1, m)), t, tc);
+      set(reeds[k].gain, 0.75 * smoothstep(0.12, 0.55, m), t, tc);
+      set(strong[k].gain, 1.3 * Math.pow(smoothstep(0.25, 0.9, m), 1.4), t, tc);   // gusts surge in
+    });
+    // Wildlife sings less as the wind rises; in calm air it carries the scene.
+    const calm = 1 - 0.65 * w;
+    set(meadow.gain, 0.55 * Math.max(mix.insects, 0.6 * mix.day) * calm, t, tc);
+    set(dawn.gain, 0.75 * mix.dawn * calm, t, tc);
+    set(lark.gain, 0.45 * (mix.day + 0.4 * mix.dawn) * calm, t, tc);
+    set(blackbird.gain, 0.65 * mix.evening * calm, t, tc);
+    set(crickets.gain, 0.7 * mix.night * (1 - 0.4 * w), t, tc);
+    set(custom.gain, 0.5 * calm, t, tc);
+  }
+
+  return {
+    update,
+    fill: (until) => players.forEach((pl) => fillPlayer(pl, until)),
+    resetClock: (t) => players.forEach((pl) => { pl.next = t; }),
+    setMaster: (v, t, tc = 0.15) => set(master.gain, v, t, tc),
+  };
+}
+
+// ---- Live playback ---------------------------------------------------------
+const MASTER_LEVEL = 1.0;
+const sound = { ctx: null, scape: null, on: false, starting: null };
+try { sound.on = localStorage.getItem('meadow-sound') === 'on'; } catch { /* storage blocked — default off */ }
+
+async function startSound() {
+  if (!sound.ctx) {
+    sound.ctx = new AudioContext({ latencyHint: 'playback' });
+    sound.starting ??= (async () => {
+      setStatus('Loading sounds…');
+      const bank = await loadSoundBank(sound.ctx);
+      sound.scape = createSoundscape(sound.ctx, SEED, bank);
+      sound.scape.update(soundState(), sound.ctx.currentTime, 0);
+      setStatus(Object.keys(bank).length ? 'Sound on' : 'Sound files not found (audio/ folder)', 1500);
+    })();
+  }
+  await sound.ctx.resume();
+  await sound.starting;
+  sound.scape.resetClock(sound.ctx.currentTime);   // fresh fade-in after a pause instead of a backlog
+  sound.scape.setMaster(MASTER_LEVEL, sound.ctx.currentTime, 0.6);
+}
+function stopSound() {
+  if (!sound.scape) return;
+  sound.scape.setMaster(0, sound.ctx.currentTime, 0.15);
+  setTimeout(() => { if (!sound.on || state.exporting) sound.ctx.suspend(); }, 700);
+}
+function tickSound() {
+  if (!sound.on || !sound.scape || sound.ctx.state !== 'running' || state.exporting) return;
+  const now = sound.ctx.currentTime;
+  sound.scape.update(soundState(), now, 0.2);
+  sound.scape.fill(now + 2);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!sound.ctx) return;
+  if (document.hidden) sound.ctx.suspend();
+  else if (sound.on && !state.exporting) startSound();
+});
+
+// ---- Offline render for export: driven by the exact per-frame states of the video ----
+async function renderLoopAudio(track, fps, seconds) {
+  const sr = 48000, tail = 3;
+  const off = new OfflineAudioContext(2, Math.round(sr * (seconds + tail)), sr);
+  const scape = createSoundscape(off, SEED + 1, await loadSoundBank(off));
+  scape.setMaster(MASTER_LEVEL, 0, 0);
+  scape.fill(seconds + tail);
+  const total = Math.ceil((seconds + tail) * fps);
+  for (let i = 0; i < total; i++) scape.update(track[i % track.length], i / fps, i === 0 ? 0 : 0.2);   // the sim is periodic
+  const buf = await off.startRendering();
+  // Seamless: cross-fade the rendered tail (T … T+3 s) into the head so the last sample flows into the first.
+  // Equal-power, because head and tail are different stretches of the recordings (uncorrelated).
+  const n = Math.round(sr * seconds), x = Math.round(sr * tail);
+  const channels = [0, 1].map((ch) => {
+    const d = buf.getChannelData(ch), o = d.slice(0, n);
+    for (let i = 0; i < x; i++) { const a = i / x; o[i] = d[i] * Math.sin(a * Math.PI / 2) + d[n + i] * Math.cos(a * Math.PI / 2); }
+    return o;
+  });
+  return { sampleRate: sr, channels };
+}
+
+async function pickAudioCodec() {
+  if (!('AudioEncoder' in window)) return null;
+  for (const c of [{ codec: 'mp4a.40.2', mux: 'aac' }, { codec: 'opus', mux: 'opus' }]) {
+    const cfg = { codec: c.codec, sampleRate: 48000, numberOfChannels: 2, bitrate: 160000 };
+    if ((await AudioEncoder.isConfigSupported(cfg).catch(() => ({}))).supported) return { ...c, cfg };
+  }
+  return null;
+}
+
+async function encodeAudio(audio, codec, muxer) {
+  let error = null;
+  const enc = new AudioEncoder({ output: (chunk, meta) => muxer.addAudioChunk(chunk, meta), error: (e) => { error = e; } });
+  enc.configure(codec.cfg);
+  const [l, r] = audio.channels, step = 4800;
+  for (let o = 0; o < l.length; o += step) {
+    const len = Math.min(step, l.length - o), data = new Float32Array(len * 2);
+    data.set(l.subarray(o, o + len), 0); data.set(r.subarray(o, o + len), len);
+    const ad = new AudioData({ format: 'f32-planar', sampleRate: audio.sampleRate, numberOfFrames: len, numberOfChannels: 2, timestamp: Math.round((o * 1e6) / audio.sampleRate), data });
+    enc.encode(ad);
+    ad.close();
+  }
+  await enc.flush();
+  if (error) throw error;
+}
+
+/* ========================================================================== */
+/*  Export: deterministic offline rendering → MP4 (WebCodecs) or GIF          */
+/* ========================================================================== */
+async function encodeLoop({ format, seconds, width, onProgress }) {
+  const fps = format === 'gif' ? 15 : 30;
+  const frames = Math.round(seconds * fps);
+  const W = Math.round((width ?? (format === 'gif' ? 360 : 1080)) / 2) * 2;
+  const H = Math.round(W / camera.aspect / 2) * 2;
+
+  // Exactly periodic wind + settle one full period → frame N flows into frame 0.
+  setLoop(seconds);
+  simTime = -seconds; lastWindTick = NaN;
+  await advanceAsync(0, (p) => onProgress(p * 0.2, 'Settling wind…'));
+
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, H, false);
+
+  let finish, addFrame;
+  const soundTrack = [];                               // per-frame sound state → audio matches the picture exactly
+  if (format === 'mp4') {
+    if (!('VideoEncoder' in window)) throw new Error('MP4 export needs a browser with WebCodecs (Chrome, Edge, Safari 17+).');
+    const { Muxer, ArrayBufferTarget } = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.mjs');
+    const bitrate = Math.round(W * H * fps * 0.18);
+    const candidates = [
+      { codec: 'avc1.640033', mux: 'avc' }, { codec: 'avc1.4d0033', mux: 'avc' }, { codec: 'avc1.42003e', mux: 'avc' },
+      { codec: 'vp09.00.51.08', mux: 'vp9' },
+    ];
+    let chosen = null;
+    for (const c of candidates) {
+      const cfg = { codec: c.codec, width: W, height: H, bitrate, framerate: fps };
+      if ((await VideoEncoder.isConfigSupported(cfg).catch(() => ({}))).supported) { chosen = { ...c, cfg }; break; }
+    }
+    if (!chosen) throw new Error('This browser cannot encode MP4 video.');
+    const audioCodec = await pickAudioCodec();          // AAC where available, else Opus; silent if neither
+    const target = new ArrayBufferTarget();
+    const muxer = new Muxer({
+      target, fastStart: 'in-memory',
+      video: { codec: chosen.mux, width: W, height: H, frameRate: fps },
+      audio: audioCodec ? { codec: audioCodec.mux, numberOfChannels: 2, sampleRate: 48000 } : undefined,
+    });
+    let encodeError = null;
+    const encoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (e) => { encodeError = e; } });
+    encoder.configure(chosen.cfg);
+    addFrame = async (i) => {
+      if (encodeError) throw encodeError;
+      const vf = new VideoFrame(renderer.domElement, { timestamp: Math.round((i * 1e6) / fps), duration: Math.round(1e6 / fps) });
+      encoder.encode(vf, { keyFrame: i % (fps * 2) === 0 });
+      vf.close();
+      while (encoder.encodeQueueSize > 4) await new Promise((r) => setTimeout(r, 2));
+    };
+    finish = async () => {
+      await encoder.flush();
+      if (audioCodec) {
+        onProgress(0.99, 'Mixing sound…');
+        await encodeAudio(await renderLoopAudio(soundTrack, fps, seconds), audioCodec, muxer);
+      }
+      muxer.finalize();
+      return new Blob([target.buffer], { type: 'video/mp4' });
+    };
+  } else {
+    const { GIFEncoder, quantize, applyPalette } = await import('https://cdn.jsdelivr.net/npm/gifenc@1.0.3/dist/gifenc.esm.js');
+    const gif = GIFEncoder();
+    const c2 = Object.assign(document.createElement('canvas'), { width: W, height: H });
+    const ctx = c2.getContext('2d', { willReadFrequently: true });
+    let palette = null;
+    addFrame = async (i) => {
+      ctx.drawImage(renderer.domElement, 0, 0, W, H);
+      const { data } = ctx.getImageData(0, 0, W, H);
+      palette ??= quantize(data, 256);                 // one palette for the whole loop → no colour flicker
+      gif.writeFrame(applyPalette(data, palette), W, H, { palette, delay: Math.round(1000 / fps), repeat: 0 });
+    };
+    finish = async () => { gif.finish(); return new Blob([gif.bytes()], { type: 'image/gif' }); };
+  }
+
+  for (let i = 0; i < frames; i++) {
+    advanceTo(i / fps);
+    syncGPU();
+    renderer.render(scene, camera);
+    soundTrack.push(soundState());
+    await addFrame(i);                                 // grab synchronously, before the buffer is presented
+    onProgress(0.2 + 0.78 * ((i + 1) / frames), `Rendering ${i + 1}/${frames}`);
+    if (i % 2) await nextFrame();
+  }
+  onProgress(0.99, 'Encoding…');
+  return finish();
+}
+
+async function runExport(format) {
+  if (state.exporting) return;
+  state.exporting = true;
+  if (sound.ctx) stopSound();
+  ui.exportStart();
+  try {
+    const blob = await encodeLoop({ format, seconds: ui.loopSeconds(), onProgress: ui.exportProgress });
+    ui.exportDone(blob, `meadow-${fmtTime(state.hour).replace(':', '')}-${wind.preset}.${format}`);
+  } catch (err) {
+    console.error(err);
+    ui.exportFailed(err.message);
+  } finally {
+    endExport();
+  }
+}
+
+function endExport() {
+  setLoop(LIVE_LOOP);
+  lastWindTick = NaN;
+  renderer.setPixelRatio(DPR);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  state.exporting = false;
+  if (sound.on && sound.ctx) startSound();
+}
+
+/* ========================================================================== */
+/*  UI                                                                        */
+/* ========================================================================== */
+const $ = (id) => document.getElementById(id);
+const ui = (() => {
+  const dock = $('dock'), bar = $('dockBar');
+  if (navigator.userAgentData?.brands?.some((b) => /Chromium/.test(b.brand))) document.body.classList.add('refract');
+
+  bar.addEventListener('click', () => {
+    const open = dock.dataset.open !== 'true';
+    dock.dataset.open = String(open);
+    bar.setAttribute('aria-expanded', String(open));
+    bar.setAttribute('aria-label', open ? 'Hide meadow controls' : 'Show meadow controls');
+    if (open) requestAnimationFrame(() => document.querySelectorAll('.seg').forEach(placePill));
+  });
+
+  // Segmented controls with a sliding pill.
+  function placePill(seg) {
+    const on = seg.querySelector('[aria-checked="true"]'), pill = seg.querySelector('.pill');
+    if (!on || !on.offsetWidth) return;
+    pill.style.width = `${on.offsetWidth}px`;
+    pill.style.transform = `translateX(${on.offsetLeft - 3}px)`;
+  }
+  function segment(seg, value, onChange) {
+    const buttons = [...seg.querySelectorAll('button')];
+    const select = (v, fire) => {
+      buttons.forEach((b) => { b.setAttribute('aria-checked', String(b.dataset.v === v)); b.tabIndex = b.dataset.v === v ? 0 : -1; });
+      placePill(seg);
+      if (fire) onChange(v);
+    };
+    buttons.forEach((b, i) => {
+      b.addEventListener('click', () => select(b.dataset.v, true));
+      b.addEventListener('keydown', (e) => {
+        const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (!d) return;
+        const nb = buttons[(i + d + buttons.length) % buttons.length];
+        nb.focus(); select(nb.dataset.v, true);
+      });
+    });
+    select(value, false);
+    return select;
+  }
+
+  // Sound: off until the user asks (and browsers need a tap before audio can start anyway).
+  const soundBtn = $('soundBtn');
+  const syncSound = () => {
+    soundBtn.setAttribute('aria-pressed', String(sound.on));
+    soundBtn.setAttribute('aria-label', sound.on ? 'Mute meadow sound' : 'Play meadow sound');
+  };
+  soundBtn.addEventListener('click', () => {
+    sound.on = !sound.on;
+    try { localStorage.setItem('meadow-sound', sound.on ? 'on' : 'off'); } catch { /* not persisted */ }
+    if (sound.on) startSound(); else stopSound();
+    syncSound();
+  });
+  // Remembered "on": start with the first touch anywhere.
+  if (sound.on) window.addEventListener('pointerdown', () => { if (sound.on) startSound(); }, { once: true });
+  syncSound();
+
+  // Time
+  const slider = $('timeSlider'), live = $('liveToggle');
+  slider.addEventListener('input', () => { state.live = false; state.hour = parseFloat(slider.value); syncTime(); });
+  live.addEventListener('click', () => { state.live = !state.live; syncTime(); });
+  function syncTime() {
+    live.setAttribute('aria-checked', String(state.live));
+    if (document.activeElement !== slider) slider.value = state.hour.toFixed(2);
+    $('barTime').textContent = fmtTime(state.hour);
+    $('barTod').textContent = todName(state.hour);
+    $('panelTod').textContent = todName(state.hour);
+    slider.setAttribute('aria-valuetext', `${fmtTime(state.hour)}, ${todName(state.hour)}`);
+    const night = state.hour < 5.8 || state.hour > 20.2;
+    slider.style.setProperty('--sun', night ? '#cdd8ff' : `#${sun.color.getHexString(THREE.SRGBColorSpace)}`);
+    slider.style.setProperty('--sun-glow', night ? 'rgba(180,200,255,.6)' : 'rgba(255,200,120,.7)');
+  }
+
+  // Wind
+  const fine = { strength: $('fStrength'), gust: $('fGust'), turb: $('fTurb') };
+  const syncFine = () => {
+    fine.strength.value = wind.speed; fine.gust.value = wind.gust; fine.turb.value = wind.turb;
+    fine.strength.nextElementSibling.textContent = `${wind.speed.toFixed(1)}`;
+    fine.gust.nextElementSibling.textContent = `${Math.round(wind.gust * 100)}%`;
+    fine.turb.nextElementSibling.textContent = `${Math.round(wind.turb * 100)}%`;
+    $('barWind').textContent = wind.preset === 'custom' ? `${wind.speed.toFixed(1)} m/s` : wind.preset[0].toUpperCase() + wind.preset.slice(1);
+  };
+  const selectWind = segment($('windSeg'), wind.preset, (v) => { applyWindPreset(v); syncFine(); });
+  for (const [key, input] of Object.entries(fine)) {
+    input.addEventListener('input', () => {
+      wind[key === 'strength' ? 'speed' : key] = parseFloat(input.value);
+      wind.preset = 'custom';
+      $('windSeg').querySelectorAll('button').forEach((b) => b.setAttribute('aria-checked', 'false'));
+      $('windSeg').querySelector('.pill').style.width = '0px';
+      syncFine();
+    });
+  }
+  $('fineToggle').addEventListener('click', (e) => {
+    const f = $('fine'), open = f.hidden;
+    f.hidden = !open;
+    e.currentTarget.setAttribute('aria-expanded', String(open));
+    e.currentTarget.textContent = open ? 'Done' : 'Fine-tune';
+  });
+  syncFine();
+
+  // Direction dial: the arrow points where the wind blows (screen space).
+  const dial = $('dial'), arrow = dial.querySelector('svg');
+  const syncDial = () => { arrow.style.transform = `rotate(${wind.dirDeg}deg)`; dial.setAttribute('aria-valuenow', String(Math.round(wind.dirDeg))); dial.setAttribute('aria-valuetext', `${Math.round(wind.dirDeg)} degrees`); };
+  let shelterTimer = 0;
+  const setDir = (deg) => {
+    setWindDir(deg); syncDial();
+    clearTimeout(shelterTimer); shelterTimer = setTimeout(computeShelter, 60);
+  };
+  const dragDial = (e) => {
+    const r = dial.getBoundingClientRect();
+    setDir(Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)) * 180 / Math.PI);
+  };
+  dial.addEventListener('pointerdown', (e) => { dial.setPointerCapture(e.pointerId); dragDial(e); });
+  dial.addEventListener('pointermove', (e) => { if (dial.hasPointerCapture(e.pointerId)) dragDial(e); });
+  dial.addEventListener('keydown', (e) => {
+    const d = { ArrowRight: 15, ArrowUp: 15, ArrowLeft: -15, ArrowDown: -15 }[e.key];
+    if (d) { e.preventDefault(); setDir(wind.dirDeg + d); }
+  });
+  syncDial();
+
+  // Sound credits (CC BY / BY-SA require them; full details in audio/CREDITS.md)
+  const SOUND_CREDITS = [
+    ['Wheat field in the wind, Luxembourg', 'Frank Schulte', 'Public Domain'],
+    ['Reeds hissing in the wind, Spremberg', 'Peter Cusack', 'Public Domain'],
+    ['Wind in the tall grass, Kotayk', 'Vincent Duseigne', 'CC BY 3.0'],
+    ['Meadow near Münsing', 'Fritz Schlüter', 'CC BY-SA 3.0'],
+    ['Dawn chorus, Radčice', 'yankrticka', 'Public Domain'],
+    ['Skylark song, Malton', 'david m', 'CC BY 3.0'],
+    ['Evening blackbird, Köln', 'hasenbrot', 'CC BY-SA 3.0'],
+    ['Crickets at night, Le Derboux', 'Jillis Molenaar', 'Public Domain'],
+  ];
+  const credits = $('credits');
+  credits.replaceChildren(...SOUND_CREDITS.map(([what, who, lic]) => Object.assign(document.createElement('li'), { textContent: `${what} — ${who} (${lic})` })),
+    Object.assign(document.createElement('li'), { textContent: 'Field recordings from radio aporee ::: maps via the Internet Archive; trimmed, filtered and normalised.' }));
+  $('creditsToggle').addEventListener('click', (e) => {
+    credits.hidden = !credits.hidden;
+    e.currentTarget.setAttribute('aria-expanded', String(!credits.hidden));
+  });
+
+  // Export
+  const exportSec = $('exportSec'), bar2 = $('progress'), saveRow = $('saveRow'), saveBtn = $('saveBtn');
+  let loopSec = '10';
+  segment($('lenSeg'), loopSec, (v) => { loopSec = v; });
+  $('mp4Btn').addEventListener('click', () => runExport('mp4'));
+  $('gifBtn').addEventListener('click', () => runExport('gif'));
+  if (!('VideoEncoder' in window)) { $('mp4Btn').disabled = true; $('mp4Btn').title = 'Needs WebCodecs (Chrome, Edge, Safari 17+)'; }
+  let saved = null;
+  saveBtn.addEventListener('click', async () => {
+    if (!saved) return;
+    // Hosted on claude.ai the page can't download by itself; the viewer confirms the save instead.
+    const downloads = await window.claude?.use?.('downloads');
+    if (downloads) {
+      try {
+        await downloads.save({ filename: saved.name, data: saved.blob });
+        $('exportNote').textContent = 'Saved';
+      } catch (e) {
+        $('exportNote').textContent = { declined: 'Save cancelled', too_large: 'Too large to save here', rate_limited: 'Try Save again in a moment' }[e?.code] ?? 'Saving isn’t available here';
+      }
+      return;
+    }
+    const file = new File([saved.blob], saved.name, { type: saved.blob.type });
+    if (/Android|iPhone|iPad/i.test(navigator.userAgent) && navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); return; } catch { /* fall back to a download */ }
+    }
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(saved.blob), download: saved.name });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  });
+
+  return {
+    syncTime,
+    loopSeconds: () => parseInt(loopSec, 10),
+    exportStart() { exportSec.classList.add('exporting'); saveRow.hidden = true; this.exportProgress(0, 'Preparing…'); },
+    exportProgress(p, text) {
+      bar2.querySelector('i').style.transform = `scaleX(${p})`;
+      $('progressText').textContent = text;
+      bar2.setAttribute('aria-valuenow', String(Math.round(p * 100)));
+    },
+    exportDone(blob, name) {
+      exportSec.classList.remove('exporting');
+      saved = { blob, name };
+      saveBtn.textContent = `Save ${name.split('.').pop().toUpperCase()} · ${(blob.size / 1e6).toFixed(1)} MB`;
+      saveRow.hidden = false;
+      $('exportNote').textContent = 'Ready';
+      if (!window.claude && !/Android|iPhone|iPad/i.test(navigator.userAgent)) saveBtn.click();   // local desktop: download straight away
+    },
+    exportFailed(msg) { exportSec.classList.remove('exporting'); $('exportNote').textContent = msg; },
+  };
+})();
+
+/* ========================================================================== */
+/*  Start                                                                     */
+/* ========================================================================== */
+window.__capture = {
+  ready: null,
+  setup() { renderer.setSize(FRAME.w, FRAME.h, false); applyTimeOfDay(state.hour); return { w: FRAME.w, h: FRAME.h }; },
+  frame(t) { simTime = t; syncGPU(); renderer.render(scene, camera); return renderer.domElement.toDataURL('image/png'); },
+  setTime(h) { state.hour = h; applyTimeOfDay(h); },
+  setWind(name) { applyWindPreset(name); },
+  setLoop(s) { setLoop(s); },
+};
+window.__capture.ready = (async () => {
+  setStatus('Loading meadow…');
+  const [photo, motion] = await Promise.all([new THREE.TextureLoader().loadAsync(PHOTO.src), buildMotionMap()]);
+  photo.colorSpace = THREE.SRGBColorSpace; photo.minFilter = THREE.LinearFilter; photo.generateMipmaps = false;
+  u.uPhoto.value = photo; u.uMotion.value = motion;
+  setStatus('Ready', 1200);
+})();
+
+if (!CAPTURE) window.__capture.ready.then(() => {
+  const clock = new THREE.Clock();
+  let t = 0, todTick = 0, frameAvg = 1 / 60, slowFor = 0, warm = 0;
+  renderer.setAnimationLoop(() => {
+    if (state.exporting) { clock.getDelta(); return; }
+    const dt = Math.min(clock.getDelta(), 1 / 20);
+    t += dt; simTime = t;
+    frameAvg += (dt - frameAvg) * 0.05;
+    if ((warm += dt) > 3 && DPR > 0.75) {                 // step sharpness down if frames stay slow
+      slowFor = frameAvg > 1 / 40 ? slowFor + dt : 0;
+      if (slowFor > 2) { DPR = Math.max(0.75, DPR - 0.25); slowFor = 0; renderer.setPixelRatio(DPR); renderer.setSize(innerWidth, innerHeight); }
+    }
+    if (state.live) state.hour = clockHour();
+    applyTimeOfDay(state.hour);
+    if ((todTick += dt) > 0.5) { todTick = 0; ui.syncTime(); }
+    syncGPU();
+    renderer.render(scene, camera);
+    tickSound();
+  });
+  ui.syncTime();
+  window.addEventListener('resize', () => { if (!state.exporting) renderer.setSize(innerWidth, innerHeight); });
+});
+</script>
+</body>
+</html>
