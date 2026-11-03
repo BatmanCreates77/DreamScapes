@@ -1284,11 +1284,15 @@ function makeCloudNoise(N = 64) {
   const tex = new THREE.Data3DTexture(data, N, N, N);
   tex.format = THREE.RGFormat; tex.wrapS = tex.wrapT = tex.wrapR = THREE.RepeatWrapping;
   tex.minFilter = tex.magFilter = THREE.LinearFilter; tex.unpackAlignment = 1; tex.needsUpdate = true;
+  let r = 0, g = 0;
+  for (let i = 0; i < data.length; i += 2) { r += data[i]; g += data[i + 1]; }
+  tex.userData.mean = new THREE.Vector3(r, r, g).multiplyScalar(2 / data.length / 255);   // per-channel averages
   return tex;
 }
 
+const cloudNoiseTex = makeCloudNoise();
 const skyU = {
-  uNoise: { value: makeCloudNoise() },
+  uNoise: { value: cloudNoiseTex }, uNoiseMean: { value: cloudNoiseTex.userData.mean },
   uInvProj: { value: new THREE.Matrix4() }, uCamWorld: { value: new THREE.Matrix4() },
   uSunDir: { value: new THREE.Vector3() }, uMoonDir: { value: MOON_DIR_SKY() }, uSunI: { value: SUN_I }, uMoonI: { value: 0 },
   uLightDir: { value: new THREE.Vector3(0, 1, 0) }, uLightCol: { value: new THREE.Vector3() },
@@ -1314,6 +1318,7 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
     uniform vec4 uLayer;               // cloud base (m), cloud top (m), storm darkness
     uniform vec4 uOffA, uOffB;         // sky time: drift x, drift z, evolution; uOffB.w = loop blend
     uniform vec4 uFlash;               // lightning: direction, brightness
+    uniform vec3 uNoiseMean;           // average of each noise channel
     varying vec2 vNdc;
     const float PI = 3.14159265, Re = 6360e3, Ra = 6420e3, Hr = 7994.0, Hm = 1200.0, bM = 21e-6;
     const vec3 bR = vec3(5.8e-6, 13.5e-6, 33.1e-6), bO = vec3(0.65e-6, 1.881e-6, 0.085e-6);   // ozone: absorbs yellow-green
@@ -1356,7 +1361,7 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
       vec3 n = cloudNoise(p, uOffA, hf, detail);
       if (uOffB.w > 0.0) {
         float a = 1.0 - uOffB.w, b = uOffB.w;
-        n = (a * (n - 0.5) + b * (cloudNoise(p, uOffB, hf, detail) - 0.5)) / length(vec2(a, b)) + 0.5;
+        n = (a * (n - uNoiseMean) + b * (cloudNoise(p, uOffB, hf, detail) - uNoiseMean)) / length(vec2(a, b)) + uNoiseMean;
       }
       float cov = clamp(uWx.x + (n.x - 0.55) * 0.6, 0.0, 1.0);
       float top = mix(0.55, 1.0, smoothstep(0.45, 0.8, n.x));
