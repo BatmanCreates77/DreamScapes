@@ -1178,7 +1178,8 @@ const skyU = {
   uSunDir: { value: new THREE.Vector3() }, uMoonDir: { value: MOON_DIR_SKY() }, uSunI: { value: SUN_I }, uMoonI: { value: 0 },
   uLightDir: { value: new THREE.Vector3(0, 1, 0) }, uLightCol: { value: new THREE.Vector3() },
   uAmbTop: { value: new THREE.Vector3() }, uAmbBot: { value: new THREE.Vector3() }, uFog: { value: new THREE.Vector3() },
-  uSkyScale: { value: SKY_SCALE }, uCoverage: { value: 0.5 }, uWind: { value: new THREE.Vector3() }, uCamH: { value: CAM.height },
+  uSkyScale: { value: SKY_SCALE }, uCamH: { value: CAM.height }, uWdir: { value: new THREE.Vector2(1, 0) },
+  uWx: { value: new THREE.Vector4() }, uLayer: { value: new THREE.Vector4() }, uOffA: { value: new THREE.Vector4() }, uOffB: { value: new THREE.Vector4() },
 };
 function MOON_DIR_SKY() { return new THREE.Vector3(0.45, 0.62, -0.65).normalize(); }
 
@@ -1191,12 +1192,15 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
     precision highp sampler3D;
     uniform sampler3D uNoise;
     uniform mat4 uInvProj, uCamWorld;
-    uniform vec3 uSunDir, uMoonDir, uLightDir, uLightCol, uAmbTop, uAmbBot, uFog, uWind;
-    uniform float uSunI, uMoonI, uSkyScale, uCoverage, uCamH;
+    uniform vec3 uSunDir, uMoonDir, uLightDir, uLightCol, uAmbTop, uAmbBot, uFog;
+    uniform float uSunI, uMoonI, uSkyScale, uCamH;
+    uniform vec2 uWdir;                // upper-wind direction (x, z)
+    uniform vec4 uWx;                  // weather: coverage, streets, shear, raggedness
+    uniform vec4 uLayer;               // cloud base (m), cloud top (m), storm darkness
+    uniform vec4 uOffA, uOffB;         // sky time: drift x, drift z, evolution; uOffB.w = loop blend
     varying vec2 vNdc;
     const float PI = 3.14159265, Re = 6360e3, Ra = 6420e3, Hr = 7994.0, Hm = 1200.0, bM = 21e-6;
     const vec3 bR = vec3(5.8e-6, 13.5e-6, 33.1e-6), bO = vec3(0.65e-6, 1.881e-6, 0.085e-6);   // ozone: absorbs yellow-green
-    const float CB = 1400.0, CT = 2700.0;                          // fair-weather cumulus: shallow, flat-based
     float sphereFar(vec3 o, vec3 d, float r) { float b = dot(o, d), c = dot(o, o) - r * r, h = b * b - c; return h < 0.0 ? -1.0 : -b + sqrt(h); }
     vec3 scatter(vec3 rd, vec3 sd, float I) {
       vec3 ro = vec3(0.0, Re + 2.0, 0.0);
@@ -1219,19 +1223,31 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
       return I * (sR * bR * pR + sM * bM * pM);
     }
     float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-    // Cloud density: a slowly drifting "weather" map decides where cumulus grow and how tall; the 3D noise
-    // gives them billowing bodies; finer noise erodes the edges into wisps.
+    // Raw cloud noise at one sky time: the weather map (where cumulus grow, stretched along the wind and
+    // banded into streets), the billowing body (rising as it boils) and the fine erosion detail.
+    vec3 cloudNoise(vec3 p, vec4 off, float hf, bool detail) {
+      vec2 xz = p.xz - off.xy - uWdir * (uWx.z * hf * 900.0);                 // shear: tops lean downwind
+      vec2 wc = vec2(dot(xz, uWdir), dot(xz, vec2(-uWdir.y, uWdir.x)));      // along / across the wind
+      float wm = texture(uNoise, vec3(wc * vec2(0.000022, 0.000035), 0.37 + off.z * 0.005)).r;   // grows and fades
+      wm += uWx.y * 0.22 * sin(wc.y * 0.0024 + 3.0 * wm);                     // streets: rows ~2.6 km apart
+      vec3 q = vec3(xz.x, p.y - off.z * 30.0, xz.y) * 0.00022;
+      return vec3(wm, texture(uNoise, q).r, detail ? texture(uNoise, q * 4.1 + 0.3).g : 1.0);
+    }
+    // In a loop export the sky at t is blended with the sky one loop earlier (variance-preserving), so the
+    // last frame flows into the first; live, only the current sky is sampled.
     float density(vec3 p, bool detail) {
-      float hf = (p.y - CB) / (CT - CB);
-      vec2 xz = p.xz - uWind.xy;
-      float wm = texture(uNoise, vec3(xz * 0.000035, 0.37)).r;
-      float cov = clamp(uCoverage + (wm - 0.55) * 0.6, 0.0, 1.0);    // scattered, separate puffs
-      float top = mix(0.55, 1.0, smoothstep(0.45, 0.8, wm));
-      float prof = smoothstep(0.0, 0.08, hf) * smoothstep(top, top * 0.35, hf);  // flat base, rounded cauliflower crown
-      vec3 q = vec3(xz.x, p.y, xz.y) * 0.00022 + vec3(0.0, uWind.z, 0.0);
-      float d = (texture(uNoise, q).r * prof - (1.0 - cov)) / max(cov, 0.05);
-      if (detail && d > 0.0) d -= (1.0 - texture(uNoise, q * 4.1 + 0.3).g) * 0.16 * (1.0 - hf * 0.6);   // crisp edges, little wisp
-      return clamp(d * 1.8, 0.0, 1.0);                               // dense bodies → crisp silhouettes
+      float hf = (p.y - uLayer.x) / (uLayer.y - uLayer.x);
+      vec3 n = cloudNoise(p, uOffA, hf, detail);
+      if (uOffB.w > 0.0) {
+        float a = 1.0 - uOffB.w, b = uOffB.w;
+        n = (a * (n - 0.5) + b * (cloudNoise(p, uOffB, hf, detail) - 0.5)) / length(vec2(a, b)) + 0.5;
+      }
+      float cov = clamp(uWx.x + (n.x - 0.55) * 0.6, 0.0, 1.0);
+      float top = mix(0.55, 1.0, smoothstep(0.45, 0.8, n.x));
+      float prof = smoothstep(0.0, 0.08 + 0.3 * uWx.w, hf) * smoothstep(top, top * 0.35, hf);  // ragged clouds lose the flat base
+      float d = (n.y * prof - (1.0 - cov)) / max(cov, 0.05);
+      if (detail && d > 0.0) d -= (1.0 - n.z) * (0.16 + 0.35 * uWx.w) * (1.0 - hf * 0.6);   // crisp edges, or torn in a storm
+      return clamp(d * 1.8, 0.0, 1.0);
     }
     float hg(float c, float g) { float g2 = g * g; return (1.0 - g2) / pow(1.0 + g2 - 2.0 * g * c, 1.5); }   // ×4π-normalised
     void main() {
@@ -1248,7 +1264,7 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
       sky += night * step(0.9975, hash(floor(sp))) * smoothstep(0.35, 0.0, length(fract(sp) - 0.5)) * vec3(0.35, 0.38, 0.45);
       vec3 col = sky;
       if (rs.y > 0.0) {
-        float t0 = (CB - uCamH) / rs.y, t1 = min((CT - uCamH) / rs.y, t0 + 20000.0);
+        float t0 = (uLayer.x - uCamH) / rs.y, t1 = min((uLayer.y - uCamH) / rs.y, t0 + 20000.0);
         if (t0 < 80000.0) {
           float stepL = (t1 - t0) / 30.0, t = t0 + stepL * hash(gl_FragCoord.xy), T = 1.0;
           float c = dot(rs, uLightDir), ph = mix(hg(c, 0.6), hg(c, -0.25), 0.3);
@@ -1259,11 +1275,11 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
             if (d > 0.003) {
               float od = 0.0;
               for (int j = 1; j <= 4; j++) od += density(p + uLightDir * (float(j * j) * 90.0), false) * float(2 * j - 1) * 90.0;
-              const float sig = 0.045;                                     // extinction per metre at full density
-              float Tl = max(exp(-od * sig * 0.6), exp(-od * sig * 0.12) * 0.78);  // 2nd lobe ≈ multiple scattering: bright white bodies
+              float dark = uLayer.z, sig = 0.045 * (1.0 + 0.8 * dark);           // extinction per metre; storm cloud is denser
+              float Tl = max(exp(-od * sig * 0.6), exp(-od * sig * 0.12) * 0.78 * (1.0 - 0.5 * dark));  // 2nd lobe ≈ multiple scattering
               float powder = 1.0 - exp(-d * stepL * sig * 2.0);
-              vec3 amb = mix(uAmbBot, uAmbTop, clamp((p.y - CB) / (CT - CB), 0.0, 1.0));
-              vec3 S = uLightCol * Tl * ph * mix(0.8, 1.0, powder) + amb;
+              vec3 amb = mix(uAmbBot, uAmbTop, clamp((p.y - uLayer.x) / (uLayer.y - uLayer.x), 0.0, 1.0)) * (1.0 - 0.4 * dark);
+              vec3 S = uLightCol * Tl * ph * mix(0.8, 1.0, powder) * (1.0 - 0.55 * dark) + amb;
               float a = exp(-d * sig * stepL);
               L += T * S * (1.0 - a);
               T *= a;
@@ -1295,6 +1311,25 @@ const sky = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMateri
 sky.frustumCulled = false; sky.renderOrder = -1;
 scene.add(sky);
 const cloud = { x: 0, z: 0, evolve: 0, last: 0 };
+// The sky follows the wind preset: each one grows its own kind of cloud.
+//   cov = share of sky, base/top = layer (m), streets = rows along the wind, shear = tops lean downwind,
+//   rag = torn edges and wispy base, dark = thick grey storm cloud.
+const CLOUD_WX = {
+  calm:   { cov: 0.17, base: 1600, top: 2300, streets: 0.0, shear: 0.0,  rag: 0.05, dark: 0.0 },   // small flat puffs (humilis)
+  breeze: { cov: 0.24, base: 1400, top: 2700, streets: 0.7, shear: 0.15, rag: 0.15, dark: 0.0 },   // fair-weather cumulus in streets
+  gusty:  { cov: 0.36, base: 1200, top: 3600, streets: 0.3, shear: 0.45, rag: 0.35, dark: 0.15 },  // taller, sheared (congestus)
+  storm:  { cov: 0.74, base: 650,  top: 2600, streets: 0.0, shear: 0.6,  rag: 0.85, dark: 0.85 },  // low, ragged, dark overcast
+};
+const SKY_TIMELAPSE = 30;                          // clouds run 30× real time so drift and growth are visible
+const wx = { ...CLOUD_WX.gusty };
+// Presets map exactly; a custom wind blends the neighbouring regimes by speed.
+function cloudTarget() {
+  const keys = Object.keys(CLOUD_WX), sp = (k) => WIND_PRESETS[k].speed;
+  let i = 0;
+  while (i < keys.length - 2 && wind.speed > sp(keys[i + 1])) i++;
+  const A = CLOUD_WX[keys[i]], B = CLOUD_WX[keys[i + 1]], k = clamp((wind.speed - sp(keys[i])) / (sp(keys[i + 1]) - sp(keys[i])), 0, 1);
+  return Object.fromEntries(Object.keys(A).map((p) => [p, A[p] + (B[p] - A[p]) * k]));
+}
 
 // Per hour: sun/moon, light reaching the clouds, sky ambient and the horizon haze — all from the same atmosphere.
 const _sizeV = new THREE.Vector2();
@@ -1307,28 +1342,34 @@ function updateSky(hour) {
   const add = (a, b) => a.map((v, k) => v + b[k]);
   const at = (dir) => add(scatterJS(dir, sd, SUN_I), scatterJS(dir, skyU.uMoonDir.value.toArray(), skyU.uMoonI.value)).map((v, k) => v * SKY_SCALE + [0.0004, 0.0008, 0.002][k]);
   const zen = at([0, 1, 0]), hor = at([0, 0.05, -0.99875]);
-  skyU.uAmbTop.value.set(...zen.map((v) => v * 2.2 + 0.004 * mi));
-  skyU.uAmbBot.value.set(...zen.map((v, k) => v * 0.8 + [hemi.groundColor.r, hemi.groundColor.g, hemi.groundColor.b][k] * hemi.intensity * 0.05));
-  skyU.uFog.value.set(...hor);
-  scene.fog.color.setRGB(...hor); scene.background.copy(scene.fog.color);
+  const zg = lum(zen), zenW = zen.map((v) => v + (zg - v) * 0.85 * wx.dark);   // storm light is grey, not sky-blue
+  skyU.uAmbTop.value.set(...zenW.map((v) => v * 2.2 + 0.004 * mi));
+  skyU.uAmbBot.value.set(...zenW.map((v, k) => v * 0.8 * (1 - 0.6 * wx.dark) + [hemi.groundColor.r, hemi.groundColor.g, hemi.groundColor.b][k] * hemi.intensity * 0.05));
+  const grey = lum(hor) * 0.85, haze = hor.map((v) => (v + (grey - v) * 0.7 * wx.dark) * (1 - 0.3 * wx.dark));   // overcast: grey, dimmer haze
+  skyU.uFog.value.set(...haze);
+  scene.fog.color.setRGB(...haze); scene.background.copy(scene.fog.color);
 }
 function TOD_MOON(h) { h = ((h % 24) + 24) % 24; let i = 0; while (i < TOD.length - 2 && TOD[i + 1].h <= h) i++; const a = TOD[i], b = TOD[i + 1]; return a.mi + (b.mi - a.mi) * smoothstep(0, 1, (h - a.h) / (b.h - a.h)); }
 
 function renderSky() {
-  // Clouds ride the upper wind (direction from the dial, faster than at the ground) and slowly change shape;
-  // a loop export sways them out and back so the last frame flows into the first.
-  const speed = 6 + 2.5 * wind.speed;
+  // Clouds ride the upper wind (the dial's direction), drift and boil at time-lapse speed, and the sky eases
+  // into the new weather over a few seconds when the preset changes.
+  const dt = clamp(simTime - cloud.last, 0, 0.1), tgt = cloudTarget();
+  for (const k in wx) wx[k] = state.exporting || CAPTURE ? tgt[k] : wx[k] + (tgt[k] - wx[k]) * Math.min(1, dt * 0.6);
+  const speed = (4 + 1.6 * wind.speed) * SKY_TIMELAPSE, boil = 0.7 + 0.6 * wind.turb;
+  const vx = wind.dir.x * speed, vz = wind.dir.y * speed;
   if (state.exporting) {
-    const ph = (2 * Math.PI * uniforms.uLoop.value.x) / LOOP, a = Math.sin(ph) * speed * 1.5;
-    skyU.uWind.value.set(cloud.x + wind.dir.x * a, cloud.z + wind.dir.y * a, cloud.evolve + 0.002 * Math.sin(ph));
+    const tau = uniforms.uLoop.value.x, T = LOOP;
+    skyU.uOffA.value.set(cloud.x + vx * tau, cloud.z + vz * tau, cloud.evolve + boil * tau, 0);
+    skyU.uOffB.value.set(cloud.x + vx * (tau - T), cloud.z + vz * (tau - T), cloud.evolve + boil * (tau - T), tau / T);
   } else {
-    const dt = clamp(simTime - cloud.last, 0, 0.1);
-    cloud.x += wind.dir.x * speed * dt; cloud.z += wind.dir.y * speed * dt;
-    cloud.evolve += dt * 0.00012 * (1 + wind.turb);
-    skyU.uWind.value.set(cloud.x, cloud.z, cloud.evolve);
+    cloud.x += vx * dt; cloud.z += vz * dt; cloud.evolve += boil * dt;
+    skyU.uOffA.value.set(cloud.x, cloud.z, cloud.evolve, 0); skyU.uOffB.value.w = 0;
   }
   cloud.last = simTime;
-  skyU.uCoverage.value = 0.22 + 0.04 * wind.gust + 0.3 * smoothstep(4, 6.5, wind.speed);   // ~1/5 of the sky; storms fill it   // stormier wind, fuller sky
+  skyU.uWdir.value.copy(wind.dir);
+  skyU.uWx.value.set(wx.cov, wx.streets, wx.shear, wx.rag);
+  skyU.uLayer.value.set(wx.base, wx.top, wx.dark, 0);
   skyU.uInvProj.value.copy(camera.projectionMatrixInverse); skyU.uCamWorld.value.copy(camera.matrixWorld);
   renderer.getDrawingBufferSize(_sizeV);
   const w = Math.max(1, Math.ceil(_sizeV.x / 2)), h = Math.max(1, Math.ceil(_sizeV.y / 2));   // half resolution: crisp cloud edges
@@ -1350,7 +1391,7 @@ function applyTimeOfDay(hour) {
   const total = si + mi + 1e-4;
   const dir = sunDir.clone().multiplyScalar(si).addScaledVector(MOON_DIR, mi).normalize();
   sun.color.copy(_c.copy(a.sc).lerp(b.sc, k)).multiplyScalar(si / total).add(MOON_COLOR.clone().multiplyScalar(mi / total));
-  sun.intensity = si + mi;
+  sun.intensity = (si + mi) * (1 - 0.8 * wx.dark);   // overcast hides the sun
   sun.position.copy(fieldCenter).addScaledVector(dir, 6);
   uniforms.uSunDirW.value.copy(dir);
   // Grazing light needs more bias, or thin blades self-shadow in stripes (acne).
@@ -1358,7 +1399,7 @@ function applyTimeOfDay(hour) {
 
   hemi.color.copy(a.sky).lerp(b.sky, k);
   hemi.groundColor.copy(a.gr).lerp(b.gr, k);
-  hemi.intensity = lerp(a.hi, b.hi);
+  hemi.intensity = lerp(a.hi, b.hi) * (1 - 0.3 * wx.dark);
   scene.fog.color.copy(a.fog).lerp(b.fog, k);
   scene.background.copy(scene.fog.color);
   updateSky(hour);                                 // haze, sky light and cloud lighting from the atmosphere
