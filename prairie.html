@@ -1457,7 +1457,8 @@ function strike(t, power) {
 function updateRain(dt) {
   const storm = smoothstep(0.45, 0.75, wx.dark);
   if (state.exporting || CAPTURE || !rain.init) {
-    rain.amount = rainTarget(); rain.init = true;
+    if (state.exporting && rain.prevTau < 0) rain.lockAmt = rainTarget();       // one rain rate for the whole loop
+    rain.amount = state.exporting ? rain.lockAmt : rainTarget(); rain.init = true;
     if (!state.exporting) rain.wet = smoothstep(0.05, 0.5, rain.amount);
   } else {
     rain.amount += (rainTarget() - rain.amount) * Math.min(1, dt * 0.5);
