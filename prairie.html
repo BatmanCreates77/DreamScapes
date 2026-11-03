@@ -1619,7 +1619,8 @@ function syncGPU() {
   tipAttr.needsUpdate = true;
   uniforms.uTime.value = simTime;
   uniforms.uWind.value.set(wind.dir.x, wind.dir.y, wind.speed * (0.5 + 0.5 * wind.gust));
-  uniforms.uLoop.value.set(((simTime % LOOP) + LOOP) % LOOP, LOOP);
+  const lt = ((simTime % LOOP) + LOOP) % LOOP;
+  uniforms.uLoop.value.set(LOOP - lt < 1e-6 ? 0 : lt, LOOP);   // −1e-15 must read as the loop's start, not its end
   renderSky();
   const ph = (2 * Math.PI * simTime) / LOOP;            // trees sway gently, periodic with the loop
   uniforms.uCanopyDrift.value.set(Math.sin(ph) * 0.025, Math.cos(ph * 2) * 0.012);
