@@ -15,5 +15,10 @@ Files derived from CC BY-SA recordings are shared under the same licence (CC BY-
 | `skylark.mp3` | Malton, UK – skylark song (2024) | david m | CC BY 3.0 | https://archive.org/details/aporee_65919_76160 |
 | `blackbird_evening.mp3` | Köln – evening blackbird (2008), from "hasenbrot – a private sound diary" | hasenbrot (radio aporee contributor) | CC BY-SA 3.0 | https://archive.org/details/aporee_1661_2374 |
 | `crickets_night.mp3` | Buis-les-Baronnies, France – Crickets at night near Le Derboux (2023) | Jillis Molenaar | Public Domain Mark 1.0 | https://archive.org/details/aporee_70552_82256 |
+| `storm_rain.mp3` | Illinois, USA – Thunderstorm and rain in a field (2013) | Felix Blume | Public Domain Mark 1.0 | https://archive.org/details/aporee_38612_44125 |
+| `rain_field.mp3` | Sainte-Élisabeth, Québec, Canada – Rain in a corn field, near (2015) | Vincent Fliniaux | CC BY-SA 3.0 | https://archive.org/details/aporee_33509_38544 |
+| `thunder.mp3` | Haßberge Nature Park, Germany – Thunderstorm with light rain, summer (2022) | beckhanspeter | Public Domain Mark 1.0 | https://archive.org/details/aporee_58274_66839 |
+
+`thunder.mp3` is seven separate thunder rolls cut from that recording, each 14 s from its onset, so the page can play one in time with a lightning flash.
 
 Licences: [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) · [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/) · [Public Domain Mark 1.0](https://creativecommons.org/publicdomain/mark/1.0/)

@@ -670,8 +670,17 @@ function updateWindGrid(time) {
 /* ========================================================================== */
 const pointer = { x: 0, z: 0, strength: 0, target: 0 };
 
+// Raindrops knock blade tips (8 chances a second, hashed per blade so loop exports repeat exactly), and the water
+// they leave weighs the blades down along their natural lean.
+let lastRainSlot = -1;
+const leanX = new Float32Array(N), leanZ = new Float32Array(N);
+for (let i = 0; i < N; i++) { const m = Math.hypot(S.restX[i], S.restZ[i]), a = i * 2.399; leanX[i] = m > 1e-4 ? S.restX[i] / m : Math.cos(a); leanZ[i] = m > 1e-4 ? S.restZ[i] / m : Math.sin(a); }
+const hashU = (a, b) => { let h = Math.imul(a, 374761393) ^ Math.imul(b + 0x9e37, 668265263); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 function stepPhysics(t, dt) {
   const { rx, rz, L, restX, restZ, k, c, exp, kc, fl, clump, fA, fB, phA, phB, dx, dz, vx, vz } = S;
+  const slot = Math.floor((((t % LOOP) + LOOP) % LOOP) * 8), hitP = rain.amount * 0.35, droop = 0.2 * rain.wet;
+  const hits = slot !== lastRainSlot && hitP > 0.005;
+  lastRainSlot = slot;
   clumpSumX.fill(0); clumpSumZ.fill(0);
   for (let i = 0; i < N; i++) { const cl = clump[i]; if (cl >= 0) { clumpSumX[cl] += dx[i]; clumpSumZ[cl] += dz[i]; } }
 
@@ -702,6 +711,11 @@ function stepPhysics(t, dt) {
     // Elastic restoring force + internal damping.
     ax -= k[i] * dx[i] + c[i] * vx[i];
     az -= k[i] * dz[i] + c[i] * vz[i];
+    if (droop > 0) { ax += k[i] * droop * L[i] * leanX[i]; az += k[i] * droop * L[i] * leanZ[i]; }
+    if (hits && hashU(i, slot) < hitP) {
+      const a = hashU(i + 7919, slot) * 6.2832, m = 0.35 + 0.5 * hashU(i, slot + 31);
+      vx[i] += (Math.cos(a) * 0.5 + leanX[i]) * m; vz[i] += (Math.sin(a) * 0.5 + leanZ[i]) * m;
+    }
 
     // Leaf flutter (vortex shedding) above the sway frequency, stronger inside gusts.
     const f = fl[i] * exp[i] * (0.25 + wg) * (0.4 + 0.25 * wind.speed);
@@ -779,14 +793,24 @@ groundMat.onBeforeCompile = (shader) => {
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <common>', `#include <common>
       varying vec3 vWPos;
-      uniform vec3 uWind; uniform vec2 uLoop;
+      uniform vec3 uWind; uniform vec2 uLoop; uniform float uWet, uRain; uniform vec3 uSkyRefl;
       ${NOISE_GLSL}
+      float hash12(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+      // Raindrop rings on standing water: one drop per 40 cm cell per cycle (whole cycles per loop).
+      float ripples(vec2 p) {
+        vec2 c = floor(p * 2.5), f = fract(p * 2.5) - 0.5;
+        float h = hash12(c), cyc = floor(uLoop.y * (0.8 + h) + 0.5);
+        float ph = fract(uLoop.x * cyc / uLoop.y + h * 7.0);
+        float r = length(f - (vec2(hash12(c + 3.1), hash12(c + 7.7)) - 0.5) * 0.5);
+        return smoothstep(0.035, 0.0, abs(r - ph * 0.45)) * (1.0 - ph) * step(hash12(c + 1.3), uRain * 1.4);
+      }
       float windWave(vec2 p, float t) {
         vec2 wd = uWind.xy;
         float along = dot(p, wd), across = dot(p, vec2(-wd.y, wd.x));
         return snoise(vec2((along - (1.0 + 0.55 * uWind.z) * t) * 0.09, across * 0.04));
       }`)
     .replace('#include <color_fragment>', `
+      float pud = 0.0, ripple = 0.0;
       vec2 p = vWPos.xz;
       float d = length(vWPos.xz - cameraPosition.xz);
       float n = snoise(p * 0.07) * 0.55 + snoise(p * 0.5 + 7.0) * 0.3 + snoise(p * 3.0) * 0.15;
@@ -805,7 +829,18 @@ groundMat.onBeforeCompile = (shader) => {
       float wave = (windWave(p, uLoop.x) * (1.0 - k) + windWave(p, uLoop.x - uLoop.y) * k) / length(vec2(1.0 - k, k));
       g *= 0.86 + 0.28 * smoothstep(-0.5, 0.8, wave);                       // combed bands: troughs dark, crests catching light
       g *= 0.75 * mix(0.45, 1.0, smoothstep(14.0, 26.0, d));   // match the shaded blade tops where the 3D grass ends                      // dark roots under the near physics grass
-      diffuseColor.rgb = g;`);
+      // Rain soaks the sward darker; water pools in shallow dips, reflecting the sky and ringed by drops.
+      g *= mix(1.0, 0.62, uWet);
+      float pn = snoise(p * 0.045 + 31.0) * 0.7 + snoise(p * 0.23 + 5.0) * 0.3;
+      float th = 1.04 - 0.5 * uWet;
+      pud = smoothstep(th, th + 0.07, pn) * step(0.05, uWet);
+      pud *= 0.55 + 0.45 * smoothstep(-0.3, 0.4, snoise(vec2(p.x * 7.0, p.y * 1.8)));   // grass pokes through
+      ripple = d < 45.0 ? ripples(p) * (1.0 - d / 45.0) : 0.0;
+      diffuseColor.rgb = mix(g, g * 0.3, pud);`)
+    .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.06, pud);')
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      float fres = 0.3 + 0.7 * pow(1.0 - saturate(dot(normalize(vViewPosition), normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz))), 4.0);
+      totalEmissiveRadiance += uSkyRefl * pud * fres * (0.8 + 1.6 * ripple);`);
 };
 const ground = new THREE.Mesh(groundGeo, groundMat);
 ground.receiveShadow = true;
@@ -973,6 +1008,8 @@ const uniforms = {
   uDew: { value: 0 },
   uWind: { value: new THREE.Vector3() },
   uLoop: { value: new THREE.Vector2(0, 60) },
+  uWet: { value: 0 }, uRain: { value: 0 },                       // how soaked everything is · current rain rate
+  uWindV: { value: new THREE.Vector2() }, uRainCol: { value: new THREE.Color() }, uSkyRefl: { value: new THREE.Color() },
 };
 
 const bladeMaterial = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.5, metalness: 0 });
@@ -994,14 +1031,14 @@ bladeMaterial.onBeforeCompile = (shader) => {
     // Morning dew: tiny beads along the blades glint toward the camera.
     float glint = pow(saturate(dot(reflect(-directLight.direction, geometryNormal), geometryViewDir)), 120.0);
     float bead = step(0.86, fract(sin(dot(vec2(floor(vT * 16.0), vLook.x * 517.0), vec2(12.9898, 78.233))) * 43758.5453));
-    reflectedLight.directSpecular += directLight.color * glint * bead * uDew * 9.0 * bladeAO;
+    reflectedLight.directSpecular += directLight.color * glint * bead * max(uDew, 0.8 * uWet) * 9.0 * bladeAO;   // dew or raindrops
     RE_Direct( directLight,`;
 
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <common>', `#include <common>
       varying float vT; varying float vSide; varying vec4 vLook; varying vec3 vWorld; varying vec3 vMid; varying vec3 vTipCol; varying float vHead;
       uniform vec3 uDry, uTrans, uSunDirW;
-      uniform float uCanopy, uTime, uTransK, uDew; uniform vec2 uCanopyDrift;
+      uniform float uCanopy, uTime, uTransK, uDew, uWet; uniform vec2 uCanopyDrift;
       float bladeAO, thinness;
       ${NOISE_GLSL}
       // Off-frame trees on the left: dappled shadow projected along the sun direction.
@@ -1037,10 +1074,12 @@ bladeMaterial.onBeforeCompile = (shader) => {
         bladeAO = mix(0.35, 0.75, vT) * vLook.z;
         thinness = 0.45;
       }
+      albedo *= mix(1.0, 0.66, uWet);                 // soaked leaves look darker and richer
       diffuseColor.rgb = albedo * bladeAO;`)
     .replace('#include <roughnessmap_fragment>', `
       float roughnessFactor = kind > 3.5 ? 0.62 : kind > 1.5 ? 0.34 : (kind > 0.5 && vT > 0.68 ? 0.75 : mix(0.6, 0.26, vT));
-      roughnessFactor = max(0.12, roughnessFactor - 0.18 * uDew);`)
+      roughnessFactor = max(0.12, roughnessFactor - 0.18 * uDew);
+      roughnessFactor = mix(roughnessFactor, 0.16, 0.8 * uWet);    // a film of water: glossy`)
     .replace('#include <lights_fragment_begin>',
       THREE.ShaderChunk.lights_fragment_begin.replaceAll('RE_Direct( directLight,', directExtras));
 };
@@ -1052,11 +1091,87 @@ depthMaterial.onBeforeCompile = (shader) => {
     .replace('#include <begin_vertex>', 'vec3 bP0, bN0; bladeCompute(bP0, bN0); vec3 transformed = bP0;');
 };
 
+// Rain: streaks falling through a box in front of the camera, slanted by the wind and blurred like a 1/45 s
+// exposure; each drop falls a whole number of times per loop. The share of drops shown is the rain rate.
+const rainU = { uHalfW: { value: 1 }, uFocal: { value: 500 } };
+const RAIN_GLSL = /* glsl */ `
+  uniform vec2 uLoop, uWindV; uniform float uRain, uHalfW, uFocal; uniform vec3 uRainCol;
+  float h1(float n) { return fract(sin(n) * 43758.5453); }`;
+const rainMat = (vertex, fragment, extra = {}) => new THREE.ShaderMaterial({
+  uniforms: { ...uniforms, ...rainU }, transparent: true, depthWrite: false, ...extra,
+  vertexShader: RAIN_GLSL + vertex,
+  fragmentShader: `uniform vec3 uRainCol; ${fragment}`.replace(/}\s*$/, `
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }`),
+});
+const RAIN_N = 14000;
+const rainGeo = new THREE.BufferGeometry();
+{
+  const seed = new Float32Array(RAIN_N * 8), end = new Float32Array(RAIN_N * 2);
+  for (let i = 0; i < RAIN_N; i++) {
+    const v = [rand(), rand(), Math.sqrt(rand()), rand()];
+    seed.set(v, i * 8); seed.set(v, i * 8 + 4); end[i * 2 + 1] = 1;
+  }
+  rainGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(RAIN_N * 6), 3));
+  rainGeo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 4));
+  rainGeo.setAttribute('aEnd', new THREE.BufferAttribute(end, 1));
+}
+const rainLines = new THREE.LineSegments(rainGeo, rainMat(`
+  attribute vec4 aSeed; attribute float aEnd; varying float vA;
+  void main() {
+    const float H = 14.0;
+    float cyc = floor(uLoop.y * (7.5 + 2.5 * aSeed.w) / H + 0.5), v = cyc * H / uLoop.y;
+    float ph = fract(aSeed.y + uLoop.x * cyc / uLoop.y), z = mix(0.7, 42.0, aSeed.z);
+    vec3 p = vec3((aSeed.x * 2.0 - 1.0) * (0.6 + uHalfW * z), H * (1.0 - ph), -z);
+    p.xz += uWindV * (ph - 0.5) * H / v;                     // blown sideways as it falls
+    p -= vec3(uWindV.x, -v, uWindV.y) * aEnd * 0.022;
+    p += vec3(cameraPosition.x, 0.0, cameraPosition.z);
+    vA = step(fract(aSeed.w * 13.37 + aSeed.x * 3.1), uRain * 0.85) * (0.3 - 0.22 * smoothstep(3.0, 42.0, z)) * (0.4 + 0.6 * h1(aSeed.x * 91.7)) * smoothstep(0.0, 0.3, p.y);
+    gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
+  }`, `varying float vA; void main() { gl_FragColor = vec4(uRainCol, vA); }`));
+rainLines.frustumCulled = false; rainLines.renderOrder = 2;
+
+// Splashes: a brief crown of droplets where a drop hits the sward. Each slot re-rolls its spot every cycle.
+const SPLASH_N = 2600;
+const splashGeo = new THREE.BufferGeometry();
+{
+  const seed = new Float32Array(SPLASH_N * 4).map(() => rand());
+  splashGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(SPLASH_N * 3), 3));
+  splashGeo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 4));
+}
+const splashes = new THREE.Points(splashGeo, rainMat(`
+  attribute vec4 aSeed; varying float vPh, vA;
+  void main() {
+    float cyc = floor(uLoop.y * (1.4 + aSeed.w) + 0.5), u = aSeed.y + uLoop.x * cyc / uLoop.y, k = floor(u);
+    vPh = fract(u) / 0.2;                                    // visible for the first fifth of each cycle (~0.1 s)
+    float r1 = h1(k * 12.9898 + aSeed.x * 78.233), r2 = h1(k * 39.346 + aSeed.z * 11.135), r3 = h1(k * 7.77 + aSeed.w * 3.3);
+    float z = mix(0.8, 16.0, r2);
+    vec3 p = vec3((r1 * 2.0 - 1.0) * (0.3 + uHalfW * z), 0.03 + 0.5 * r3 * r3, -z) + vec3(cameraPosition.x, 0.0, cameraPosition.z);
+    vA = step(vPh, 1.0) * step(fract(aSeed.w * 13.37), uRain);
+    vec4 mv = viewMatrix * vec4(p, 1.0);
+    gl_PointSize = vA * uFocal * 0.045 / -mv.z;
+    gl_Position = projectionMatrix * mv;
+  }`, `varying float vPh, vA;
+  void main() {
+    vec2 c = (gl_PointCoord * 2.0 - 1.0) * vec2(1.0, -1.0) + vec2(0.0, 0.6);
+    float crown = 0.0;
+    for (int j = 0; j < 5; j++) {
+      float ang = 0.4 + float(j) * 0.585;                    // droplets fanned over the upper half-circle
+      vec2 q = vec2(cos(ang), sin(ang)) * (0.15 + 0.75 * vPh) - vec2(0.0, 0.9 * vPh * vPh);
+      crown += smoothstep(0.13, 0.04, length(c - q));
+    }
+    float a = vA * min(crown, 1.0) * (1.0 - vPh) * 0.8;
+    if (a < 0.01) discard;
+    gl_FragColor = vec4(uRainCol * 1.3, a);
+  }`));
+splashes.frustumCulled = false; splashes.renderOrder = 1;
+
 const meadow = new THREE.Mesh(geometry, bladeMaterial);
 meadow.customDepthMaterial = depthMaterial;
 meadow.castShadow = meadow.receiveShadow = true;
 meadow.frustumCulled = false;
-scene.add(meadow);
+scene.add(meadow, rainLines, splashes);
 
 
 /* ========================================================================== */
@@ -1179,7 +1294,7 @@ const skyU = {
   uLightDir: { value: new THREE.Vector3(0, 1, 0) }, uLightCol: { value: new THREE.Vector3() },
   uAmbTop: { value: new THREE.Vector3() }, uAmbBot: { value: new THREE.Vector3() }, uFog: { value: new THREE.Vector3() },
   uSkyScale: { value: SKY_SCALE }, uCamH: { value: CAM.height }, uWdir: { value: new THREE.Vector2(1, 0) },
-  uWx: { value: new THREE.Vector4() }, uLayer: { value: new THREE.Vector4() }, uOffA: { value: new THREE.Vector4() }, uOffB: { value: new THREE.Vector4() },
+  uWx: { value: new THREE.Vector4() }, uLayer: { value: new THREE.Vector4() }, uOffA: { value: new THREE.Vector4() }, uOffB: { value: new THREE.Vector4() }, uFlash: { value: new THREE.Vector4() },
 };
 function MOON_DIR_SKY() { return new THREE.Vector3(0.45, 0.62, -0.65).normalize(); }
 
@@ -1198,6 +1313,7 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
     uniform vec4 uWx;                  // weather: coverage, streets, shear, raggedness
     uniform vec4 uLayer;               // cloud base (m), cloud top (m), storm darkness
     uniform vec4 uOffA, uOffB;         // sky time: drift x, drift z, evolution; uOffB.w = loop blend
+    uniform vec4 uFlash;               // lightning: direction, brightness
     varying vec2 vNdc;
     const float PI = 3.14159265, Re = 6360e3, Ra = 6420e3, Hr = 7994.0, Hm = 1200.0, bM = 21e-6;
     const vec3 bR = vec3(5.8e-6, 13.5e-6, 33.1e-6), bO = vec3(0.65e-6, 1.881e-6, 0.085e-6);   // ozone: absorbs yellow-green
@@ -1262,6 +1378,7 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
       float night = 1.0 - smoothstep(0.004, 0.04, dot(sky, vec3(0.3, 0.5, 0.2)));
       vec2 sp = vec2(atan(rs.x, -rs.z), asin(rs.y)) * 700.0;
       sky += night * step(0.9975, hash(floor(sp))) * smoothstep(0.35, 0.0, length(fract(sp) - 0.5)) * vec3(0.35, 0.38, 0.45);
+      sky = mix(sky, vec3(dot(sky, vec3(0.3, 0.5, 0.2))), 0.7 * uLayer.z) * (1.0 - 0.35 * uLayer.z);   // overcast: grey
       vec3 col = sky;
       if (rs.y > 0.0) {
         float t0 = (uLayer.x - uCamH) / rs.y, t1 = min((uLayer.y - uCamH) / rs.y, t0 + 20000.0);
@@ -1280,6 +1397,7 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
               float powder = 1.0 - exp(-d * stepL * sig * 2.0);
               vec3 amb = mix(uAmbBot, uAmbTop, clamp((p.y - uLayer.x) / (uLayer.y - uLayer.x), 0.0, 1.0)) * (1.0 - 0.4 * dark);
               vec3 S = uLightCol * Tl * ph * mix(0.8, 1.0, powder) * (1.0 - 0.55 * dark) + amb;
+              S += uFlash.w * vec3(0.75, 0.8, 1.0) * (0.04 + 1.1 * pow(max(dot(rs, uFlash.xyz), 0.0), 16.0));   // lit from inside
               float a = exp(-d * sig * stepL);
               L += T * S * (1.0 - a);
               T *= a;
@@ -1290,6 +1408,7 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
           col = mix(sky, sky * T + L, exp(-t0 / 40000.0));                // distant clouds melt into the haze
         }
       }
+      col += uFlash.w * 0.012 * vec3(0.75, 0.8, 1.0);
       col = mix(uFog, col, smoothstep(0.0, 0.035, rd.y));               // sky meets the land's haze without a seam
       gl_FragColor = vec4(col, 1.0);
     }`,
@@ -1313,13 +1432,52 @@ scene.add(sky);
 const cloud = { x: 0, z: 0, evolve: 0, last: 0 };
 // The sky follows the wind preset: each one grows its own kind of cloud.
 //   cov = share of sky, base/top = layer (m), streets = rows along the wind, shear = tops lean downwind,
-//   rag = torn edges and wispy base, dark = thick grey storm cloud.
+//   rag = torn edges and wispy base, dark = thick grey storm cloud, rain = peak rain rate (0..1),
+//   showery = 1 → rain comes and goes in passing showers, 0 → steady.
 const CLOUD_WX = {
-  calm:   { cov: 0.17, base: 1600, top: 2300, streets: 0.0, shear: 0.0,  rag: 0.05, dark: 0.0 },   // small flat puffs (humilis)
-  breeze: { cov: 0.24, base: 1400, top: 2700, streets: 0.7, shear: 0.15, rag: 0.15, dark: 0.0 },   // fair-weather cumulus in streets
-  gusty:  { cov: 0.36, base: 1200, top: 3600, streets: 0.3, shear: 0.45, rag: 0.35, dark: 0.15 },  // taller, sheared (congestus)
-  storm:  { cov: 0.74, base: 650,  top: 2600, streets: 0.0, shear: 0.6,  rag: 0.85, dark: 0.85 },  // low, ragged, dark overcast
+  calm:   { cov: 0.17, base: 1600, top: 2300, streets: 0.0, shear: 0.0,  rag: 0.05, dark: 0.0,  rain: 0,    showery: 0 },   // small flat puffs (humilis)
+  breeze: { cov: 0.24, base: 1400, top: 2700, streets: 0.7, shear: 0.15, rag: 0.15, dark: 0.0,  rain: 0,    showery: 0 },   // fair-weather cumulus in streets
+  gusty:  { cov: 0.36, base: 1200, top: 3600, streets: 0.3, shear: 0.45, rag: 0.35, dark: 0.15, rain: 0.5,  showery: 1 },   // taller, sheared (congestus)
+  storm:  { cov: 0.86, base: 650,  top: 2600, streets: 0.0, shear: 0.6,  rag: 0.85, dark: 0.85, rain: 0.95, showery: 0.15 }, // low, ragged, dark overcast
 };
+// Rain, wet ground and lightning. Live, showers come and go and lightning strikes at random; in a loop export
+// the rain holds steady and one flash lands at a fixed moment, so the loop stays seamless.
+const rain = { amount: 0, wet: 0, flash: 0, flashT: -99, nextFlash: 6, flashDir: new THREE.Vector3(0, 0.2, -1), thunderAt: Infinity,
+  thunderGain: 0, thunder: 0, init: false, prevTau: 0, hemiBase: 0 };
+function rainTarget() {
+  const env = smoothstep(-0.05, 0.25, fbm2(simTime * 0.022, 9.1, 2));          // passing showers, ~1 min apart
+  return wx.rain * (1 - wx.showery + wx.showery * env);
+}
+function strike(t, power) {
+  const az = (Math.random() - 0.5) * 2.2, el = 0.08 + Math.random() * 0.25;
+  rain.flashT = t; rain.flashDir.set(Math.sin(az), el, -Math.cos(az)).normalize();
+  const delay = 1.2 + Math.random() * 6;                                        // sound travels ~340 m/s
+  rain.thunderAt = t + delay; rain.thunderGain = power * (1.15 - delay / 9);
+}
+function updateRain(dt) {
+  const storm = smoothstep(0.45, 0.75, wx.dark);
+  if (state.exporting || CAPTURE || !rain.init) {
+    rain.amount = rainTarget(); rain.init = true;
+    if (!state.exporting) rain.wet = smoothstep(0.05, 0.5, rain.amount);
+  } else {
+    rain.amount += (rainTarget() - rain.amount) * Math.min(1, dt * 0.5);
+    // Ground soaks up rain in ~10 s of a downpour and dries over a couple of minutes.
+    rain.wet = clamp(rain.wet + (rain.amount > 0.03 ? rain.amount * 0.12 * (1 - rain.wet) : -0.008) * dt, 0, 1);
+  }
+  if (state.exporting) {
+    const tau = uniforms.uLoop.value.x, T = LOOP, at = 0.3 * T, prev = rain.prevTau;
+    if (storm > 0.5 && prev < at && tau >= at) { rain.flashDir.set(-0.35, 0.18, -0.92).normalize(); rain.flashT = simTime; }
+    const ta = (at + 2.5) % T;
+    if (storm > 0.5 && prev < ta && tau >= ta) rain.thunder = 0.9;
+    rain.prevTau = tau;
+  } else if (storm > 0.3 && rain.amount > 0.3) {
+    if (simTime >= rain.nextFlash) { strike(simTime, 0.6 + 0.4 * Math.random()); rain.nextFlash = simTime + 7 + Math.random() * 18; }
+  } else rain.nextFlash = Math.max(rain.nextFlash, simTime + 4);
+  if (!state.exporting && simTime >= rain.thunderAt) { rain.thunder = rain.thunderGain; rain.thunderAt = Infinity; }
+  // A strike is two or three quick return strokes, then darkness.
+  const f = simTime - rain.flashT;
+  rain.flash = f < 0 || f > 1 ? 0 : [0, 0.13, 0.31].reduce((a, t0, k) => a + (f >= t0 ? Math.exp(-(f - t0) / 0.06) * [1, 0.6, 0.8][k] : 0), 0);
+}
 const SKY_TIMELAPSE = 30;                          // clouds run 30× real time so drift and growth are visible
 const wx = { ...CLOUD_WX.gusty };
 // Presets map exactly; a custom wind blends the neighbouring regimes by speed.
@@ -1370,15 +1528,27 @@ function renderSky() {
   skyU.uWdir.value.copy(wind.dir);
   skyU.uWx.value.set(wx.cov, wx.streets, wx.shear, wx.rag);
   skyU.uLayer.value.set(wx.base, wx.top, wx.dark, 0);
+  updateRain(dt);
+  skyU.uFlash.value.set(rain.flashDir.x, rain.flashDir.y, rain.flashDir.z, rain.flash);
+  hemi.intensity = rain.hemiBase + 0.6 * rain.flash;
+  uniforms.uWet.value = rain.wet; uniforms.uRain.value = rain.amount;
+  uniforms.uWindV.value.set(wind.dir.x, wind.dir.y).multiplyScalar(wind.speed * (0.8 + 0.4 * wind.gust));
+  scene.fog.near = 80 - 55 * rain.amount; scene.fog.far = 2600 - 2000 * rain.amount;   // a grey veil of rain hides the distance
+  uniforms.uRainCol.value.copy(scene.fog.color).multiplyScalar(1.7).addScalar(0.02 + 0.4 * rain.flash);
+  uniforms.uSkyRefl.value.copy(scene.fog.color).multiplyScalar(0.6 + 0.8 * rain.flash);
+  rainLines.visible = splashes.visible = rain.amount > 0.01;
   skyU.uInvProj.value.copy(camera.projectionMatrixInverse); skyU.uCamWorld.value.copy(camera.matrixWorld);
   renderer.getDrawingBufferSize(_sizeV);
   const w = Math.max(1, Math.ceil(_sizeV.x / 2)), h = Math.max(1, Math.ceil(_sizeV.y / 2));   // half resolution: crisp cloud edges
+  rainU.uHalfW.value = Math.tan(THREE.MathUtils.degToRad(CAM.vfov / 2)) * camera.aspect * 1.15;
+  rainU.uFocal.value = _sizeV.y / (2 * Math.tan(THREE.MathUtils.degToRad(CAM.vfov / 2)));
   if (skyRT.width !== w || skyRT.height !== h) { skyRT.setSize(w, h); sky.material.uniforms.uTexel.value.set(1 / w, 1 / h); }
   renderer.setRenderTarget(skyRT); renderer.render(skyScene, camera); renderer.setRenderTarget(null);
 }
 
 const _c = new THREE.Color();
 function applyTimeOfDay(hour) {
+  if (CAPTURE) Object.assign(wx, cloudTarget());   // offline frames: weather already settled
   hour = ((hour % 24) + 24) % 24;
   let i = 0;
   while (i < TOD.length - 2 && TOD[i + 1].h <= hour) i++;
@@ -1399,7 +1569,7 @@ function applyTimeOfDay(hour) {
 
   hemi.color.copy(a.sky).lerp(b.sky, k);
   hemi.groundColor.copy(a.gr).lerp(b.gr, k);
-  hemi.intensity = lerp(a.hi, b.hi) * (1 - 0.3 * wx.dark);
+  hemi.intensity = rain.hemiBase = lerp(a.hi, b.hi) * (1 - 0.3 * wx.dark);
   scene.fog.color.copy(a.fog).lerp(b.fog, k);
   scene.background.copy(scene.fog.color);
   updateSky(hour);                                 // haze, sky light and cloud lighting from the atmosphere
@@ -1489,7 +1659,9 @@ const AUDIO_PROBE = (() => {
 
 function soundState() {
   const sideSpeed = ({ idx, w, sum }) => { let s = 0; for (let k = 0; k < idx.length; k++) s += w[k] * Math.hypot(S.vx[idx[k]], S.vz[idx[k]]); return s / sum; };
-  return { wind: clamp(wind.speed / 6.5, 0, 1), left: sideSpeed(AUDIO_PROBE.left), right: sideSpeed(AUDIO_PROBE.right), hour: state.hour };
+  const thunder = rain.thunder; rain.thunder = 0;              // a thunderclap is an event: heard once
+  return { wind: clamp(wind.speed / 6.5, 0, 1), left: sideSpeed(AUDIO_PROBE.left), right: sideSpeed(AUDIO_PROBE.right), hour: state.hour,
+    rain: rain.amount, storm: smoothstep(0.45, 0.75, wx.dark), thunder };
 }
 
 // How much of each ambience is present at a given hour (0..1).
@@ -1505,7 +1677,9 @@ function ambienceMix(h) {
 }
 
 // Field recordings (see audio/CREDITS.md). Each is trimmed, de-rumbled and normalised to −23 LUFS.
-const SOUND_FILES = ['grass_gentle', 'grass_reeds', 'grass_strong', 'meadow_day', 'dawn_chorus', 'skylark', 'blackbird_evening', 'crickets_night'];
+const SOUND_FILES = ['grass_gentle', 'grass_reeds', 'grass_strong', 'meadow_day', 'dawn_chorus', 'skylark', 'blackbird_evening', 'crickets_night',
+  'rain_field', 'storm_rain', 'thunder'];
+const THUNDER_CLAPS = 7, THUNDER_LEN = 14;                // thunder.mp3: seven rolls, each 14 s from its onset
 const AMBIENCE_URL = params.get('ambience');            // optional extra loop of your own: ?ambience=file.mp3
 const soundBytes = new Map();                           // fetched once, decoded per audio context
 async function loadSoundBank(ctx) {
@@ -1568,6 +1742,19 @@ function createSoundscape(ctx, seed, bank) {
   const meadow = track(bank.meadow_day, 0), dawn = track(bank.dawn_chorus, 0), lark = track(bank.skylark, 0.2);
   const blackbird = track(bank.blackbird_evening, -0.25), crickets = track(bank.crickets_night, 0);
   const custom = track(bank.custom, 0);
+  const rainL = track(bank.rain_field, -0.6), rainR = track(bank.rain_field, 0.6), storm = track(bank.storm_rain, 0);
+
+  // Thunder rolls are one-shots: a random clap from the recording, further ones duller and quieter.
+  let lastClap = -1;
+  function thunderAt(t, g) {
+    if (!bank.thunder || g <= 0) return;
+    let k = Math.floor(rnd() * THUNDER_CLAPS); if (k === lastClap) k = (k + 1) % THUNDER_CLAPS; lastClap = k;
+    const src = ctx.createBufferSource(), lp = ctx.createBiquadFilter(), gn = ctx.createGain(), pan = ctx.createStereoPanner();
+    src.buffer = bank.thunder; lp.type = 'lowpass'; lp.frequency.value = 600 + 5000 * g * g;
+    gn.gain.value = 1.6 * g; pan.pan.value = (rnd() - 0.5) * 0.8;
+    src.connect(lp).connect(gn).connect(pan).connect(master);
+    src.start(Math.max(t, ctx.currentTime), k * THUNDER_LEN, THUNDER_LEN - 0.2);
+  }
 
   const set = (param, v, t, tc) => (tc > 0 ? param.setTargetAtTime(v, t, tc) : param.setValueAtTime(v, t));
 
@@ -1580,8 +1767,13 @@ function createSoundscape(ctx, seed, bank) {
       set(reeds[k].gain, 0.75 * smoothstep(0.12, 0.55, m), t, tc);
       set(strong[k].gain, 1.3 * Math.pow(smoothstep(0.25, 0.9, m), 1.4), t, tc);   // gusts surge in
     });
-    // Wildlife sings less as the wind rises; in calm air it carries the scene.
-    const calm = 1 - 0.65 * w;
+    // Rain hiss on the grass follows the rain rate; the storm bed (heavy rain, distant rumbles) only in a storm.
+    const r = st.rain ?? 0;
+    set(rainL.gain, 1.1 * smoothstep(0.02, 0.6, r), t, tc); set(rainR.gain, 1.1 * smoothstep(0.02, 0.6, r), t, tc);
+    set(storm.gain, 1.2 * smoothstep(0.4, 0.9, r) * (st.storm ?? 0), t, tc);
+    if (st.thunder > 0) thunderAt(t, st.thunder);
+    // Wildlife sings less as the wind rises and hides from the rain; in calm air it carries the scene.
+    const calm = (1 - 0.65 * w) * (1 - 0.9 * smoothstep(0.05, 0.4, r));
     set(meadow.gain, 0.55 * Math.max(mix.insects, 0.6 * mix.day) * calm, t, tc);
     set(dawn.gain, 0.75 * mix.dawn * calm, t, tc);
     set(lark.gain, 0.45 * (mix.day + 0.4 * mix.dawn) * calm, t, tc);
@@ -1698,6 +1890,7 @@ async function encodeLoop({ format, seconds, width, onProgress }) {
 
   renderer.setPixelRatio(1);
   renderer.setSize(W, H, false);
+  rain.thunder = 0; rain.prevTau = -1;
 
   let finish, addFrame;
   const soundTrack = [];                               // per-frame sound state → audio matches the picture exactly
@@ -1926,6 +2119,9 @@ const ui = (() => {
     ['Skylark song, Malton', 'david m', 'CC BY 3.0'],
     ['Evening blackbird, Köln', 'hasenbrot', 'CC BY-SA 3.0'],
     ['Crickets at night, Le Derboux', 'Jillis Molenaar', 'Public Domain'],
+    ['Thunderstorm and rain in a field, Illinois', 'Felix Blume', 'Public Domain'],
+    ['Rain in a corn field, Sainte-Élisabeth', 'Vincent Fliniaux', 'CC BY-SA 3.0'],
+    ['Thunderstorm, Haßberge', 'beckhanspeter', 'Public Domain'],
   ];
   const credits = $('credits');
   credits.replaceChildren(...SOUND_CREDITS.map(([what, who, lic]) => Object.assign(document.createElement('li'), { textContent: `${what} — ${who} (${lic})` })),
