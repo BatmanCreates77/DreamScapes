@@ -877,7 +877,10 @@ sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.0015;
 sun.shadow.radius = 2;
 const hemi = new THREE.HemisphereLight();
-scene.add(sun, sun.target, hemi);
+// Lightning: a cold white light from the strike's direction, on only while it flashes (no shadow map: a flash
+// is too brief to need one, and the sky's diffuse share comes through the hemisphere light).
+const bolt = new THREE.DirectionalLight(new THREE.Color('#d8e0ff'), 0);
+scene.add(sun, sun.target, hemi, bolt, bolt.target);
 
 // Rolling hills: one terrain mesh; beyond the physics grass its shader paints grass, flowers and wind waves.
 const groundGeo = new THREE.PlaneGeometry(6000, 6000, 8, 8).rotateX(-Math.PI / 2).translate(0, 0, -2990);
@@ -1133,7 +1136,9 @@ bladeMaterial.onBeforeCompile = (shader) => {
     .replace('#include <beginnormal_vertex>', 'vec3 bP0, bN0; bladeCompute(bP0, bN0); vec3 objectNormal = bN0;')
     .replace('#include <begin_vertex>', 'vec3 transformed = bP0;');
 
+  // Braced: three.js repeats this once per directional light (sun/moon, lightning), so locals must not collide.
   const directExtras = /* glsl */ `
+    {
     directLight.color *= canopyLight(vWorld);
     // Thin leaves transmit light: glow when backlit, softer wrap from behind.
     float backlit = pow(saturate(dot(-geometryViewDir, directLight.direction)), 5.0);
@@ -1144,6 +1149,7 @@ bladeMaterial.onBeforeCompile = (shader) => {
     float glint = pow(saturate(dot(reflect(-directLight.direction, geometryNormal), geometryViewDir)), 120.0);
     float bead = step(0.86, fract(sin(dot(vec2(floor(vT * 16.0), vLook.x * 517.0), vec2(12.9898, 78.233))) * 43758.5453));
     reflectedLight.directSpecular += directLight.color * glint * bead * max(uDew, 0.8 * uWet) * 9.0 * bladeAO;   // dew or raindrops
+    }
     RE_Direct( directLight,`;
 
   shader.fragmentShader = shader.fragmentShader
@@ -1319,6 +1325,8 @@ const TOD = [
 ].map(([h, sc, si, mi, sky, gr, hi, fog, ex, tr]) => ({ h, sc: linear(sc), si, mi, sky: linear(sky), gr: linear(gr), hi, fog: linear(fog), ex, tr }));
 
 const MOON_COLOR = linear('#9db2ff');
+const GLOW = [0.010, 0.012, 0.017];                       // linear radiance of a glowing night cloud deck
+const NIGHT_GLOW_SKY = linear('#6a7690'), NIGHT_GLOW_GROUND = linear('#1c2418');   // overcast-night skyglow
 const MOON_DIR = new THREE.Vector3(0.45, 0.62, -0.65).normalize();
 const SUNRISE = 5.9, DAYLEN = 14;
 
@@ -1446,7 +1454,7 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
     uniform vec4 uWx;                  // weather: coverage, streets, shear, raggedness
     uniform vec4 uLayer;               // cloud base (m), cloud top (m), storm darkness
     uniform vec4 uOffA, uOffB;         // sky time: drift x, drift z, evolution; uOffB.w = loop blend
-    uniform vec4 uFlash;               // lightning: direction, brightness
+    uniform vec4 uFlash;               // lightning: direction, brightness (pre-scaled for exposure)
     uniform vec3 uNoiseMean;           // average of each noise channel
     uniform vec4 uRainSky;             // rain the sky can give (0..1), showeriness
     varying vec2 vNdc;
@@ -1579,7 +1587,7 @@ skyScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
         vec3 cc = mix(uFog, uAmbTop * 0.3 + uAmbBot * 0.45, 0.45) * (1.0 + 0.4 * uFlash.w);
         col = mix(col, cc, a);
       }
-      col += uFlash.w * 0.012 * vec3(0.75, 0.8, 1.0);
+      col += uFlash.w * 0.02 * vec3(0.75, 0.8, 1.0);
       col = mix(uFog, col, smoothstep(0.0, 0.035, rd.y));               // sky meets the land's haze without a seam
       gl_FragColor = vec4(mix(texture(uPrev, gl_FragCoord.xy / uRes).rgb, col, uBlend), 1.0);
     }`,
@@ -1705,9 +1713,13 @@ function updateSky(hour) {
   const at = (dir) => add(scatterJS(dir, sd, SUN_I), scatterJS(dir, skyU.uMoonDir.value.toArray(), skyU.uMoonI.value)).map((v, k) => v * SKY_SCALE + [0.0004, 0.0008, 0.002][k]);
   const zen = at([0, 1, 0]), hor = at([0, 0.05, -0.99875]);
   const zg = lum(zen), zenW = zen.map((v) => v + (zg - v) * 0.85 * wx.dark);   // storm light is grey, not sky-blue
-  skyU.uAmbTop.value.set(...zenW.map((v) => v * 2.2 + 0.004 * mi));
-  skyU.uAmbBot.value.set(...zenW.map((v, k) => v * 0.8 * (1 - 0.6 * wx.dark) + [hemi.groundColor.r, hemi.groundColor.g, hemi.groundColor.b][k] * hemi.intensity * 0.05));
-  const grey = lum(hor) * 0.85, haze = hor.map((v) => (v + (grey - v) * 0.7 * wx.dark) * (1 - 0.3 * wx.dark));   // overcast: grey, dimmer haze
+  // An overcast night is never black: the cloud deck glows faintly, lit from above by the moon and from below by
+  // distant towns. That glow replaces the hidden moon as the light on the land.
+  const glow = smoothstep(0.1, 0.6, mi) * smoothstep(0.55, 0.95, wx.cov);
+  rain.night = smoothstep(0.1, 0.6, mi); rain.glow = glow;
+  skyU.uAmbTop.value.set(...zenW.map((v, k) => v * 2.2 + 0.004 * mi + GLOW[k] * 1.8 * glow));
+  skyU.uAmbBot.value.set(...zenW.map((v, k) => v * 0.8 * (1 - 0.6 * wx.dark) + [hemi.groundColor.r, hemi.groundColor.g, hemi.groundColor.b][k] * hemi.intensity * 0.05 + GLOW[k] * 0.9 * glow));
+  const grey = lum(hor) * 0.85, haze = hor.map((v, k) => Math.max((v + (grey - v) * 0.7 * wx.dark) * (1 - 0.3 * wx.dark), GLOW[k] * 0.9 * glow));   // overcast: grey, dimmer haze; never black under a glowing deck
   skyU.uFog.value.set(...haze);
   scene.fog.color.setRGB(...haze); scene.background.copy(scene.fog.color);
 }
@@ -1733,8 +1745,10 @@ function renderSky() {
   skyU.uWx.value.set(wx.cov, wx.streets, wx.shear, wx.rag);
   skyU.uLayer.value.set(wx.base, wx.top, wx.dark, 0);
   updateRain(dt);
-  skyU.uFlash.value.set(rain.flashDir.x, rain.flashDir.y, rain.flashDir.z, rain.flash);
-  hemi.intensity = rain.hemiBase + 0.6 * rain.flash;
+  skyU.uFlash.value.set(rain.flashDir.x, rain.flashDir.y, rain.flashDir.z, rain.flash * (1 - 0.6 * (rain.night ?? 0)));   // night exposure is ~2.7× day
+  hemi.intensity = rain.hemiBase + (0.6 + 0.3 * (rain.night ?? 0)) * rain.flash;
+  bolt.intensity = rain.flash * (1.5 + 2.2 * (rain.night ?? 0));            // a strike floods a dark prairie with light
+  bolt.position.copy(fieldCenter).addScaledVector(rain.flashDir, 10); bolt.target.position.copy(fieldCenter);
   uniforms.uWet.value = rain.wet; uniforms.uRain.value = rain.amount; uniforms.uSoil.value = rain.soil; uniforms.uPond.value = rain.pond;
   uniforms.uDrop.value = wx.drop;
   skyU.uRainSky.value.set(wx.rain, wx.showery, 0, 0);
@@ -1742,7 +1756,8 @@ function renderSky() {
   const veil = rain.amount * (1.25 - 0.25 * wx.drop);                                 // drizzle hangs as mist
   scene.fog.near = 80 - 55 * Math.min(1, veil); scene.fog.far = Math.max(450, 2600 - 2000 * veil);   // a grey veil of rain hides the distance
   uniforms.uRainCol.value.copy(scene.fog.color).multiplyScalar(1.7).addScalar(0.02 + 0.4 * rain.flash);
-  uniforms.uSkyRefl.value.copy(scene.fog.color).multiplyScalar(0.6 + 0.8 * rain.flash);
+  uniforms.uSkyRefl.value.copy(scene.fog.color).multiplyScalar(0.75).addScalar((0.2 + 0.25 * (rain.night ?? 0)) * rain.flash)
+    .add(_c.setRGB(GLOW[0], GLOW[1], GLOW[2]).multiplyScalar(2.2 * (rain.glow ?? 0)));   // pools mirror the glow, and blaze with each flash
   rainLines.visible = splashes.visible = rain.amount > 0.01;
   skyU.uInvProj.value.copy(camera.projectionMatrixInverse); skyU.uCamWorld.value.copy(camera.matrixWorld);
   renderer.getDrawingBufferSize(_sizeV);
@@ -1785,6 +1800,9 @@ function applyTimeOfDay(hour) {
   hemi.color.copy(a.sky).lerp(b.sky, k);
   hemi.groundColor.copy(a.gr).lerp(b.gr, k);
   hemi.intensity = rain.hemiBase = lerp(a.hi, b.hi) * (1 - 0.3 * wx.dark) * (1 + 0.7 * smoothstep(0.55, 0.95, wx.cov));   // the whole sky lights an overcast day
+  const nightCloud = smoothstep(0.1, 0.6, mi) * smoothstep(0.55, 0.95, wx.cov);
+  hemi.color.lerp(NIGHT_GLOW_SKY, 0.8 * nightCloud); hemi.groundColor.lerp(NIGHT_GLOW_GROUND, 0.6 * nightCloud);
+  hemi.intensity = rain.hemiBase = Math.max(hemi.intensity, 2.2 * nightCloud);   // enough to read wet grass and pools
   scene.fog.color.copy(a.fog).lerp(b.fog, k);
   scene.background.copy(scene.fog.color);
   updateSky(hour);                                 // haze, sky light and cloud lighting from the atmosphere
