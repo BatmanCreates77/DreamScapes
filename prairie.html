@@ -2196,7 +2196,8 @@ const ui = (() => {
     if (open) requestAnimationFrame(() => document.querySelectorAll('.seg').forEach(placePill));
   });
 
-  // Segmented controls with a sliding pill.
+  // Segmented controls with a sliding pill (re-measured when the layout changes size).
+  window.addEventListener('resize', () => document.querySelectorAll('.seg').forEach(placePill));
   function placePill(seg) {
     const on = seg.querySelector('[aria-checked="true"]'), pill = seg.querySelector('.pill');
     if (!on || !on.offsetWidth) return;
